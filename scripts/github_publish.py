@@ -5,7 +5,7 @@ import httpx
 from release_common import VERSION,NOTES
 
 root=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('action',choices=['reset-old','release','website','status']);parser.add_argument('--repo',choices=['dawnbreaker-website','DawnBreaker'],default='dawnbreaker-website');args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('action',choices=['reset-old','release','website','status']);parser.add_argument('--desktop-dir',type=Path,default=root/'release/desktop');parser.add_argument('--repo',choices=['dawnbreaker-website','DawnBreaker'],default='dawnbreaker-website');args=parser.parse_args()
 if args.action=='website' and args.repo!='dawnbreaker-website':raise SystemExit('Website publication stays in the website repository')
 token=getpass.getpass('GitHub token (hidden): ')
 client=httpx.Client(base_url='https://api.github.com',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},trust_env=False,timeout=60)
@@ -62,7 +62,7 @@ if args.action=='reset-old':
 
 if args.action=='release':
     version=VERSION;tag='v'+version
-    files=[root/'release/desktop'/f'DawnBreaker-{version}-Windows.exe',root/'release/android'/f'DawnBreaker-{version}-Android.apk',root/'release'/f'windows-{version}.json',root/'release'/f'android-{version}.json']
+    files=[args.desktop_dir/f'DawnBreaker-{version}-Windows.exe',root/'release/android'/f'DawnBreaker-{version}-Android.apk',root/'release'/f'windows-{version}.json',root/'release'/f'android-{version}.json']
     for file in files:
         if not file.is_file():raise RuntimeError('Missing release artifact: '+file.name)
     source_archive=root/'release'/f'DawnBreaker-{version}-ThirdPartySources.zip'

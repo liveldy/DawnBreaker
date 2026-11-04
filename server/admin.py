@@ -11,6 +11,7 @@ from .db import connect, now
 from .plugins import BY_ID, catalog
 from pwdlib import PasswordHash
 from .content_store import items
+from .library_storage import usage as library_usage
 
 router=APIRouter(prefix='/api/admin',tags=['管理员'])
 KINDS=['essence','stones']
@@ -44,7 +45,18 @@ def detail(uid:str,u=Depends(require_admin)):
         progress=[dict(r)|{'value':json.loads(r['value'])} for r in db.execute('SELECT plugin_id,key,value FROM progress WHERE user_id=? ORDER BY plugin_id,key',(uid,))]
         events=[dict(r)|{'payload':json.loads(r['payload'])} for r in db.execute('SELECT id,kind,payload,created_at FROM events WHERE user_id=? ORDER BY id DESC LIMIT 100',(uid,))]
         ledger=[dict(r) for r in db.execute("SELECT id,kind,amount,reason,source,created_at FROM ledger WHERE user_id=? AND kind IN ('essence','stones') ORDER BY id DESC LIMIT 100",(uid,))]
-        return {'user':public_user(row),'wallet':{k:balance(db,uid,k) for k in KINDS},'plugins':catalog(db,uid),'progress':progress,'events':events,'ledger':ledger}
+        return {'user':public_user(row),'library_storage':library_usage(db,uid),'wallet':{k:balance(db,uid,k) for k in KINDS},'plugins':catalog(db,uid),'progress':progress,'events':events,'ledger':ledger}
+
+class LibraryQuota(BaseModel):
+    quota_mb:int=Field(ge=0,le=1048576)
+
+@router.patch('/users/{uid}/library-quota')
+def library_quota(uid:str,body:LibraryQuota,u=Depends(require_admin)):
+    with connect(True) as d:
+        old=target(d,uid);value=body.quota_mb*1048576
+        d.execute('UPDATE users SET library_quota_bytes=? WHERE id=?',(value,uid))
+        audit(d,u,'调整流萤集空间',uid,{'quota_bytes':old['library_quota_bytes']},{'quota_bytes':value})
+        return {'message':'流萤集空间已调整，已有内容保留','storage':library_usage(d,uid)}
 
 class Account(BaseModel):
     username:str=Field(min_length=3,max_length=24,pattern='^[a-zA-Z0-9_]+$')
@@ -169,8 +181,8 @@ def delete_user(uid:str,u=Depends(require_admin)):
         if uid==u['id']: raise HTTPException(409,'不能删除当前登录的管理员')
         if old['role']=='admin' and db.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]<=1: raise HTTPException(409,'至少保留一个管理员')
         if db.execute("SELECT 1 FROM downloads WHERE user_id=? AND status IN ('queued','downloading')",(uid,)).fetchone(): raise HTTPException(409,'该账号有处理中的下载任务')
-        if db.execute("SELECT 1 FROM ai_turns WHERE user_id=? AND status='running'",(uid,)).fetchone() or db.execute("SELECT 1 FROM import_jobs WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone():raise HTTPException(409,'请等待该账号的回答或文档识别完成后再删除')
-        for table in ['wallpapers','practice_sessions','api_monitors','ai_turns','ai_threads','ai_prompts','assistants','vaults','import_jobs','library_nodes','listening_segments','sessions','installed','balances','ledger','progress','events','downloads']: db.execute('DELETE FROM '+table+' WHERE user_id=?',(uid,))
+        if db.execute("SELECT 1 FROM ai_turns WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone() or db.execute("SELECT 1 FROM import_jobs WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone():raise HTTPException(409,'请等待该账号的回答或文档识别完成后再删除')
+        for table in ['quote_history','checkin_notes','library_images','wallpapers','practice_sessions','api_monitors','ai_turns','ai_threads','ai_prompts','assistants','vaults','import_jobs','library_nodes','listening_segments','sessions','installed','balances','ledger','progress','events','downloads']: db.execute('DELETE FROM '+table+' WHERE user_id=?',(uid,))
         db.execute('DELETE FROM users WHERE id=?',(uid,))
         audit(db,u,'删除账号及全部业务数据',uid,public_user(old))
     return {'message':'账号及其业务数据已删除，管理日志保留'}

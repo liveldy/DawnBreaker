@@ -8,7 +8,7 @@ declare global {interface Window{dawnMedia?:any}}
 export const nativeMedia:any=androidMedia?registerPlugin('DawnMedia'):window.dawnMedia;
 export function NativeTools({boot,notify}:{boot:Bootstrap;notify:(s:string)=>void}){
  const[open,setOpen]=useState(false);const dialog=useRef<HTMLDialogElement>(null);
- useEffect(()=>{nativeMedia?.configure({quotes:boot.plugins.some(p=>p.id==='quotes'),music:boot.plugins.some(p=>p.id==='music'),account:boot.user.id}).catch(()=>{});},[boot.user.id,boot.plugins.map(p=>p.id).join(',')]);
+ useEffect(()=>{const configure=()=>{nativeMedia?.configure({quotes:boot.plugins.some(p=>p.id==='quotes'),music:boot.plugins.some(p=>p.id==='music'),account:boot.user.id}).catch(()=>{});};configure();window.addEventListener('dawn:quote-changed',configure);return()=>window.removeEventListener('dawn:quote-changed',configure);},[boot.user.id,boot.plugins.map(p=>p.id).join(',')]);
  useEffect(()=>{if(open){window.dispatchEvent(new Event('dawn:modal-open'));dialog.current?.showModal();}return()=>dialog.current?.close();},[open]);
  if(!nativeMedia)return null;
  const widget=async(kind:string)=>{try{const result=await nativeMedia.widget({kind});if(result?.message)notify(result.message);}catch{notify('请在桌面的小组件列表中添加破晓控件。');}};

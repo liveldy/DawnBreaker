@@ -18,3 +18,4 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><Boundary>
 import './collection.css';
 import './client-updates.css';
 import './update-mobile-fixes.css';
+import './repairs.css';

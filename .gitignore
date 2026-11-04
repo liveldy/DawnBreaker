@@ -38,3 +38,5 @@ android/app/src/main/assets/linkswift/
 .env.*
 !.env.example
 
+
+android/app/src/main/assets/geodata/

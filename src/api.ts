@@ -7,7 +7,7 @@ export async function api<T=any>(path:string, options:RequestInit={}):Promise<T>
   return data;
 }
 export const post=(path:string,body?:unknown)=>api(path,{method:'POST',body:body===undefined?undefined:JSON.stringify(body)});
-export type Plugin={id:string;name:string;description:string;type:'standard'|'content';category:string;icon:string;ui?:string;parent?:string;installed:boolean;version:string;note?:string;requires:string[]};
+export type Plugin={id:string;name:string;description:string;type:'standard'|'content';category:string;icon:string;ui?:string;parent?:string;installed:boolean;version:string;note?:string;requires:string[];platforms?:string[]};
 export type User={id:string;username:string;nickname:string;bio:string;created_at:string;role:'user'|'admin';avatar_url?:string|null};
 export type Bootstrap={user:User;wallet:{essence:number;stones:number};plugins:Plugin[];version:string};
 export const go=(route:string)=>{location.hash=route;};

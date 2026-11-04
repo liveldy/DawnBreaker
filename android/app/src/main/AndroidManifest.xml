@@ -41,10 +41,6 @@
             <intent-filter><action android:name="android.net.VpnService"/></intent-filter>
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated VPN proxy using embedded Mihomo"/>
         </service>
-        <service android:name=".DawnWallpaperService" android:label="浮光掠影" android:process=":wallpaper" android:exported="true" android:permission="android.permission.BIND_WALLPAPER">
-            <intent-filter><action android:name="android.service.wallpaper.WallpaperService"/></intent-filter>
-            <meta-data android:name="android.service.wallpaper" android:resource="@xml/wallpaper_info"/>
-        </service>
         <service android:name=".DawnQuoteService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
         <service android:name=".DawnMusicService" android:exported="false" android:foregroundServiceType="mediaPlayback" android:stopWithTask="false"/>
         <receiver android:name=".DawnWidgets$QuoteWidget" android:label="流光笺" android:exported="false"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_quote_info"/></receiver>
@@ -54,7 +50,6 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    <uses-permission android:name="android.permission.SET_WALLPAPER"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>

@@ -59,6 +59,9 @@ def init():
         ''')
         if 'input_hash' not in {r[1] for r in db.execute('PRAGMA table_info(ai_turns)')}:
             db.execute("ALTER TABLE ai_turns ADD COLUMN input_hash TEXT NOT NULL DEFAULT ''")
+        for column,default in [('trace','[]'),('reasoning',''),('error','')]:
+            if column not in {r[1] for r in db.execute('PRAGMA table_info(ai_turns)')}:
+                db.execute("ALTER TABLE ai_turns ADD COLUMN "+column+" TEXT NOT NULL DEFAULT '"+default+"'")
         for table,column in [('ai_threads','archived'),('import_jobs','deleted')]:
             if column not in {r[1] for r in db.execute('PRAGMA table_info('+table+')')}:
                 db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' INTEGER NOT NULL DEFAULT 0')
@@ -77,6 +80,14 @@ def init():
         if 'role' not in {r[1] for r in db.execute('PRAGMA table_info(users)')}:
             db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('user','admin'))")
         if 'avatar' not in {r[1] for r in db.execute('PRAGMA table_info(users)')}:db.execute("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+        if 'library_quota_bytes' not in {r[1] for r in db.execute('PRAGMA table_info(users)')}:
+            db.execute('ALTER TABLE users ADD COLUMN library_quota_bytes INTEGER NOT NULL DEFAULT 67108864')
+        db.executescript('''
+        CREATE TABLE IF NOT EXISTS library_images(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),filename TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS library_images_owner ON library_images(user_id);
+        CREATE TABLE IF NOT EXISTS checkin_notes(user_id TEXT NOT NULL REFERENCES users(id),day TEXT NOT NULL,content TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,day));
+        CREATE TABLE IF NOT EXISTS quote_history(user_id TEXT NOT NULL REFERENCES users(id),day TEXT NOT NULL,quote_id TEXT NOT NULL,snapshot TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,day));
+        ''')
         # Retired currencies are removed, with no conversion or archive.
         db.execute("DELETE FROM balances WHERE kind IN ('climb','collection')")
         db.execute("DELETE FROM ledger WHERE kind IN ('climb','collection')")

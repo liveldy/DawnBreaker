@@ -92,7 +92,7 @@ def test_ai_rolls_context_into_library_memory_and_refuses_truncated_edits(client
     monkeypatch.setattr(secret_store,'DATA',tmp_path);register(client);install(client,'library','constellation')
     workspace=create(client,'folder');memory=create(client,'folder');doc=create(client,parent=workspace['id'],text='x'*20000)
     a=assistant(client,workspace_id=workspace['id'],memory_id=memory['id'],context_chars=8000);t=thread(client,a);summaries=[]
-    def model(config,key,messages,system,max_tokens=None):
+    def model(config,key,messages,system,max_tokens=None,tools=None):
         if max_tokens==1200:summaries.append(messages);return '# 长期记忆\n用户正在整理数学笔记。'
         return json.dumps({'reply':'继续整理。','edits':[{'document_id':doc['id'],'revision':1,'markdown':'must not replace truncated content'}]})
     monkeypatch.setattr(ai,'invoke',model)

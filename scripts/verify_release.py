@@ -1,5 +1,5 @@
 """Verify live release identity/signatures, catalog nesting and stored binary digests."""
-import base64,hashlib,json,shlex,secrets
+import base64,hashlib,json,shlex,secrets,argparse
 from pathlib import Path
 import httpx
 from cryptography.hazmat.primitives import serialization,hashes
@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from release_common import VERSION,VERSION_CODE,ROOT
 from remote import connection
 public=serialization.load_pem_public_key((ROOT/'clients/desktop/update-public.pem').read_bytes())
+parser=argparse.ArgumentParser();parser.add_argument('--desktop-dir',type=Path,default=ROOT/'release/desktop');args=parser.parse_args()
 uid=None
 try:
  with httpx.Client(base_url='http://110.42.63.153:7780',trust_env=False,timeout=60,headers={'Origin':'http://110.42.63.153:7780'}) as c:
@@ -27,7 +28,7 @@ try:
     print('PASS: production album -> 104 universes -> 168 series, all 1580 stable card IDs',flush=True)
  with connection() as ssh:
     for platform,folder,suffix in [('windows','desktop','Windows.exe'),('android','android','Android.apk')]:
-        file=ROOT/'release'/folder/f'DawnBreaker-{VERSION}-{suffix}'
+        file=(args.desktop_dir if platform=='windows' else ROOT/'release'/folder)/f'DawnBreaker-{VERSION}-{suffix}'
         _,out,err=ssh.exec_command('sha256sum '+shlex.quote('/var/lib/dawnbreaker/client-releases/'+file.name));assert out.read().decode().split()[0]==hashlib.sha256(file.read_bytes()).hexdigest();assert out.channel.recv_exit_status()==0
         print('PASS: production '+platform+' binary digest',flush=True)
 finally:

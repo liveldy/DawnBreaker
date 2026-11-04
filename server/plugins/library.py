@@ -1,20 +1,24 @@
 """Account-scoped Markdown/LaTeX library. Node IDs never denote filesystem paths."""
-import json,os,sys,uuid,subprocess,threading
+import json,os,sys,uuid,subprocess,threading,hashlib,io,shutil,re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 from urllib.parse import quote
 from fastapi import APIRouter,Depends,HTTPException,UploadFile,File,Form,Response
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel,Field
 from ..core import require_plugin
 from ..db import connect,now,DATA
 from ..milestones import record_edit
+from ..library_storage import usage,ensure,text_bytes,IMAGES
+from PIL import Image,ImageOps,UnidentifiedImageError
 
 MANIFEST={'id':'library','name':'流萤集','description':'把书籍和文档收进自己的书架。Markdown 与 LaTeX 编辑、公式预览，免费本地 OCR 导入。','category':'阅读与创作','icon':'BookOpen','ui':'library'}
 router=APIRouter(prefix='/api/plugins/library',tags=['流萤集']);user=require_plugin('library')
 IMPORTS=DATA/'library-imports';IMPORTS.mkdir(exist_ok=True)
 POOL=ThreadPoolExecutor(max_workers=1,thread_name_prefix='dawn-ocr')
+IMAGE_LIMIT=threading.BoundedSemaphore(2)
 
 def node(db,uid,id):
     row=db.execute('SELECT * FROM library_nodes WHERE id=? AND user_id=?',(id,uid)).fetchone()
@@ -30,7 +34,8 @@ def within(db,uid,id,root):
         seen.add(id);id=node(db,uid,id)['parent_id']
     return False
 def create_document(db,uid,parent,title,markdown,source=None):
-    folder(db,uid,parent);id=uuid.uuid4().hex;stamp=now()
+    if db.execute('SELECT COUNT(*) FROM library_nodes WHERE user_id=?',(uid,)).fetchone()[0]>=10000:raise HTTPException(409,'文档数量已达上限')
+    folder(db,uid,parent);ensure(db,uid,text_bytes(title,markdown));id=uuid.uuid4().hex;stamp=now()
     db.execute('INSERT INTO library_nodes VALUES(?,?,?,?,?,?,1,?,?,?)',(id,uid,parent,'document',title,markdown,source,stamp,stamp))
     return node(db,uid,id)
 
@@ -50,13 +55,15 @@ def listing(u=Depends(user)):
     with connect() as d:
         rows=[dict(r) for r in d.execute('SELECT id,parent_id,kind,title,revision,source_job_id,updated_at FROM library_nodes WHERE user_id=? ORDER BY kind DESC,title',(u['id'],))]
         jobs=[dict(r) for r in d.execute('SELECT id,parent_id,title,mode,status,error,document_id,created_at FROM import_jobs WHERE user_id=? AND deleted=0 ORDER BY created_at DESC LIMIT 30',(u['id'],))]
-    return {'nodes':rows,'imports':jobs,'ocr':'Pix2Text','supports':['markdown','latex','pdf','image']}
+        storage=usage(d,u['id'])
+    return {'nodes':rows,'imports':jobs,'storage':storage,'ocr':'Pix2Text','supports':['markdown','latex','pdf','image']}
 @router.post('/nodes',status_code=201)
 def create(body:Create,u=Depends(user)):
     with connect(True) as d:
         folder(d,u['id'],body.parent_id)
         if d.execute('SELECT COUNT(*) FROM library_nodes WHERE user_id=?',(u['id'],)).fetchone()[0]>=10000:raise HTTPException(409,'文档数量已达上限')
         if body.kind=='document':return create_document(d,u['id'],body.parent_id,body.title,body.markdown)
+        ensure(d,u['id'],text_bytes(body.title))
         id=uuid.uuid4().hex;stamp=now();d.execute('INSERT INTO library_nodes VALUES(?,?,?,?,?,?,1,NULL,?,?)',(id,u['id'],body.parent_id,'folder',body.title,'',stamp,stamp));return node(d,u['id'],id)
 @router.get('/nodes/{id}')
 def get(id:str,u=Depends(user)):
@@ -66,19 +73,24 @@ def update(id:str,body:Update,u=Depends(user)):
     with connect(True) as d:
         current=node(d,u['id'],id);folder(d,u['id'],body.parent_id)
         if current['revision']!=body.revision:raise HTTPException(409,'文档已在其他位置修改，请重新打开后再保存')
+        ensure(d,u['id'],text_bytes(body.title,body.markdown if current['kind']=='document' else '')-text_bytes(current['title'],current['markdown']))
         if body.parent_id and (body.parent_id==id or within(d,u['id'],body.parent_id,id)):raise HTTPException(422,'不能把文件夹移入自身或子目录')
         if current['kind']=='document':record_edit(d,u['id'],id,current['markdown'],body.markdown)
-        d.execute('UPDATE library_nodes SET parent_id=?,title=?,markdown=?,revision=revision+1,updated_at=? WHERE id=?',(body.parent_id,body.title,body.markdown if current['kind']=='document' else '',now(),id));return node(d,u['id'],id)
+        d.execute('UPDATE library_nodes SET parent_id=?,title=?,markdown=?,revision=revision+1,updated_at=? WHERE id=?',(body.parent_id,body.title,body.markdown if current['kind']=='document' else '',now(),id));result=node(d,u['id'],id)
+    cleanup_assets(u['id'],current)
+    return result
 @router.delete('/nodes/{id}')
 def delete(id:str,u=Depends(user)):
     with connect(True) as d:
-        node(d,u['id'],id)
+        current=node(d,u['id'],id)
         if d.execute('SELECT 1 FROM library_nodes WHERE parent_id=? AND user_id=?',(id,u['id'])).fetchone():raise HTTPException(409,'请先移走文件夹内的内容')
         # Configured AI folders cannot disappear beneath a working assistant.
         for row in d.execute('SELECT config FROM assistants WHERE user_id=?',(u['id'],)):
             config=json.loads(row[0])
             if id in (config.get('workspace_id'),config.get('memory_id')):raise HTTPException(409,'此文件夹正在被星丛使用，请先修改助手配置')
         d.execute('DELETE FROM library_nodes WHERE id=?',(id,))
+        d.execute('UPDATE import_jobs SET document_id=NULL WHERE user_id=? AND document_id=?',(u['id'],id))
+    cleanup_assets(u['id'],current)
     return {'message':'已删除'}
 @router.get('/nodes/{id}/export')
 def export(id:str,u=Depends(user)):
@@ -89,6 +101,20 @@ def export(id:str,u=Depends(user)):
 def job_path(uid,id):
     if not all(c in '0123456789abcdef' for c in uid+id) or len(uid)!=32 or len(id)!=32:raise HTTPException(404,'文件不存在')
     return IMPORTS/uid/id
+
+def cleanup_assets(uid,document):
+    candidates=set(re.findall(r'/api/plugins/library/imports/([a-f0-9]{32})/assets/',document.get('markdown','')))
+    if document.get('source_job_id'):candidates.add(document['source_job_id'])
+    with connect(True) as d:
+        for id in candidates:
+            job=d.execute('SELECT * FROM import_jobs WHERE id=? AND user_id=?',(id,uid)).fetchone()
+            if not job or job['status'] in ('queued','running') or job['document_id'] and d.execute('SELECT 1 FROM library_nodes WHERE id=? AND user_id=?',(job['document_id'],uid)).fetchone():continue
+            prefix='/api/plugins/library/imports/'+id+'/assets/'
+            if d.execute('SELECT 1 FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(uid,prefix)).fetchone():continue
+            work=job_path(uid,id)
+            if work.is_dir():
+                try:shutil.rmtree(work)
+                except OSError:pass
 def run_import(uid,id):
     with connect(True) as d:
         job=d.execute('SELECT * FROM import_jobs WHERE id=? AND user_id=?',(id,uid)).fetchone()
@@ -103,11 +129,17 @@ def run_import(uid,id):
         content=json.loads(output.read_text(encoding='utf-8'))['markdown']
         if not content.strip():raise RuntimeError('没有识别到内容，请检查文件或切换识别模式。')
         if len(content)>1000000:raise RuntimeError('识别内容过长，请拆分书籍后重试。')
+        output.unlink(missing_ok=True)
         with connect(True) as d:
+            ensure(d,uid,len(content.encode('utf8')))
             doc=create_document(d,uid,job['parent_id'],job['title'],content,id)
             d.execute("UPDATE import_jobs SET status='completed',document_id=?,error=NULL,updated_at=? WHERE id=?",(doc['id'],now(),id))
     except Exception as e:
-        message=str(e) if isinstance(e,RuntimeError) else '识别超时或服务暂不可用，请重试或拆分文件。'
+        if isinstance(e,HTTPException) and e.status_code==413:
+            generated=work/'output'
+            if generated.is_dir():shutil.rmtree(generated)
+            output.unlink(missing_ok=True)
+        message=str(e.detail) if isinstance(e,HTTPException) else str(e) if isinstance(e,RuntimeError) else '识别超时或服务暂不可用，请重试或拆分文件。'
         with connect(True) as d:d.execute("UPDATE import_jobs SET status='failed',error=?,updated_at=? WHERE id=?",(message,now(),id))
 
 @router.post('/imports',status_code=202)
@@ -130,6 +162,7 @@ async def import_file(file:UploadFile=File(...),parent_id:str=Form(''),mode:Lite
             d.execute('INSERT INTO import_jobs(id,user_id,parent_id,title,filename,mode,status,document_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(id,u['id'],parent_id,title,'',mode,'completed',doc['id'],stamp,stamp))
             return {'id':id,'status':'completed','document_id':doc['id']}
         if d.execute("SELECT COUNT(*) FROM import_jobs WHERE status IN ('queued','running')").fetchone()[0]>=8 or d.execute("SELECT COUNT(*) FROM import_jobs WHERE user_id=? AND status IN ('queued','running')",(u['id'],)).fetchone()[0]>=2:raise HTTPException(429,'已有文件正在识别，请稍候')
+        ensure(d,u['id'],len(content))
         id=uuid.uuid4().hex;work=job_path(u['id'],id);work.mkdir(parents=True,mode=0o700);filename='source'+extension;(work/filename).write_bytes(content)
         stamp=now();d.execute('INSERT INTO import_jobs(id,user_id,parent_id,title,filename,mode,status,error,document_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,NULL,?,?)',(id,u['id'],parent_id,title,filename,mode,'queued',stamp,stamp))
     POOL.submit(run_import,u['id'],id)
@@ -151,6 +184,11 @@ def remove_import(id:str,u=Depends(user)):
         if job['status'] in ('queued','running'):raise HTTPException(409,'识别完成后可删除记录')
         # Retain document-linked image assets; deleting history must not break a book.
         d.execute('UPDATE import_jobs SET deleted=1 WHERE id=?',(id,))
+        work=job_path(u['id'],id)
+        if work.is_dir():
+            references=d.execute('SELECT 1 FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(u['id'],'/api/plugins/library/imports/'+id+'/assets/')).fetchone()
+            if not job['document_id'] and not references:shutil.rmtree(work)
+            elif job['filename']:(work/job['filename']).unlink(missing_ok=True)
     return {'message':'导入记录已删除，文档及其图片保留'}
 @router.get('/imports/{id}/assets/{asset:path}')
 def asset(id:str,asset:str,u=Depends(user)):
@@ -159,3 +197,51 @@ def asset(id:str,asset:str,u=Depends(user)):
     root=job_path(u['id'],id)/'output';path=(root/asset).resolve()
     if not path.is_relative_to(root.resolve()) or not path.is_file() or path.suffix.lower() not in ('.png','.jpg','.jpeg','.webp'):raise HTTPException(404,'图片不存在')
     return FileResponse(path)
+
+def prepare_image(data):
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format not in ('PNG','JPEG','WEBP','GIF') or image.width*image.height>24000000:raise ValueError()
+            image=ImageOps.exif_transpose(image);out=io.BytesIO();image.save(out,'WEBP',quality=90);data=out.getvalue()
+    except (OSError,ValueError,UnidentifiedImageError,Image.DecompressionBombError):raise HTTPException(422,'请使用有效的 PNG、JPEG、WebP 或 GIF 图片，尺寸不超过 2400 万像素')
+    return data
+
+@router.post('/images',status_code=201)
+async def upload_image(file:UploadFile=File(...),u=Depends(user)):
+    data=await file.read(10*1024*1024+1)
+    if not data or len(data)>10*1024*1024:raise HTTPException(413,'图片需小于 10 MB')
+    if not IMAGE_LIMIT.acquire(False):raise HTTPException(429,'图片处理繁忙，请稍后重试')
+    try:data=await run_in_threadpool(prepare_image,data)
+    finally:IMAGE_LIMIT.release()
+    id=uuid.uuid4().hex;filename=id+'.webp';directory=IMAGES/u['id'];directory.mkdir(exist_ok=True)
+    path=directory/filename
+    try:
+        with connect(True) as d:
+            ensure(d,u['id'],len(data));path.write_bytes(data)
+            d.execute('INSERT INTO library_images VALUES(?,?,?,?,?,?,?)',(id,u['id'],filename,'image/webp',len(data),hashlib.sha256(data).hexdigest(),now()))
+    except Exception:path.unlink(missing_ok=True);raise
+    return {'id':id,'url':'/api/plugins/library/images/'+id,'size':len(data),'name':(file.filename or '图片')[:200]}
+
+@router.get('/images')
+def images(u=Depends(user)):
+    with connect() as d:
+        rows=[dict(r) for r in d.execute('SELECT id,size,created_at FROM library_images WHERE user_id=? ORDER BY created_at DESC',(u['id'],))]
+        for row in rows:row['url']='/api/plugins/library/images/'+row['id'];row['references']=d.execute('SELECT COUNT(*) FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(u['id'],row['url'])).fetchone()[0]
+        return {'images':rows,'storage':usage(d,u['id'])}
+
+@router.get('/images/{id}')
+def image(id:str,u=Depends(user)):
+    with connect() as d:row=d.execute('SELECT * FROM library_images WHERE id=? AND user_id=?',(id,u['id'])).fetchone()
+    if not row:raise HTTPException(404,'图片不存在')
+    return FileResponse(IMAGES/u['id']/row['filename'],media_type='image/webp')
+
+@router.delete('/images/{id}')
+def delete_image(id:str,u=Depends(user)):
+    with connect(True) as d:
+        row=d.execute('SELECT * FROM library_images WHERE id=? AND user_id=?',(id,u['id'])).fetchone()
+        if not row:raise HTTPException(404,'图片不存在')
+        url='/api/plugins/library/images/'+id
+        if d.execute('SELECT 1 FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(u['id'],url)).fetchone():raise HTTPException(409,'图片仍被文档引用，请先在文档中移除图片')
+        d.execute('DELETE FROM library_images WHERE id=? AND user_id=?',(id,u['id']))
+    (IMAGES/u['id']/row['filename']).unlink(missing_ok=True)
+    return {'message':'图片已删除，空间已释放'}

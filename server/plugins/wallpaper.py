@@ -9,7 +9,7 @@ from typing import Literal
 from PIL import Image,ImageOps,UnidentifiedImageError
 from ..core import require_plugin
 from ..db import connect,DATA,now
-MANIFEST={'id':'wallpaper','name':'浮光掠影','description':'为桌面与手机制作图像、视频或网页壁纸。本地创作，管理员可发布到云端。','category':'桌面与个性化','icon':'Wallpaper','ui':'wallpaper'}
+MANIFEST={'id':'wallpaper','name':'浮光掠影','description':'为 Windows 桌面制作图像、视频或可交互网页壁纸，支持多显示器。管理员可发布到云端。','category':'桌面与个性化','icon':'Wallpaper','ui':'wallpaper','platforms':['desktop']}
 router=APIRouter(prefix='/api/plugins/wallpaper',tags=['浮光掠影']);user=require_plugin('wallpaper');ROOT=DATA/'wallpapers';ROOT.mkdir(exist_ok=True)
 LIMIT=100*1024*1024
 class Variant(BaseModel):

@@ -18,9 +18,30 @@
     "package.json",
     "widget.html",
     "widget.js",
-    "web/**"
+    "web/**",
+    "wallpaper-input.ps1"
   ],
-  "extraResources": [{"from":"clients/desktop/bin","to":"bin","filter":["mihomo.exe"]},{"from":"third_party","to":"third_party"}],
+  "extraResources": [
+    {
+      "from": "clients/desktop/bin",
+      "to": "bin",
+      "filter": [
+        "mihomo.exe"
+      ]
+    },
+    {
+      "from": "third_party",
+      "to": "third_party"
+    },
+    {
+      "from": ".tooling/geodata",
+      "to": "geodata",
+      "filter": [
+        "*.dat",
+        "*.mmdb"
+      ]
+    }
+  ],
   "win": {
     "target": [
       "portable"

@@ -19,15 +19,7 @@ def available(db,uid):
 
 @router.get('')
 def quote(u=Depends(require_plugin('quotes'))):
-    with connect(True) as db:
-        quotes=available(db,u['id'])
-        if not quotes:raise HTTPException(409,'金句内容为空，请联系管理员补充')
-        schedule=db.execute('SELECT quote_id FROM quote_schedule WHERE day=?',(today(),)).fetchone()
-        chosen=state(db,u['id'],'quotes','daily',{})
-        result=next((q for q in quotes if schedule and q['id']==schedule[0]),None)
-        if not result:result=next((q for q in quotes if chosen.get('day')==today() and q['id']==chosen.get('id')),None) or secrets.choice(quotes)
-        set_state(db,u['id'],'quotes','daily',{'day':today(),'id':result['id']})
-    return result|{'date':today(),'audio':'/api/plugins/quotes/audio/'+result['id'] if result.get('audio') else None}
+    return current(u)
 
 @router.get('/audio/{quote_id}')
 def voice(quote_id:str,u=Depends(require_plugin('quotes'))):
@@ -37,4 +29,7 @@ def voice(quote_id:str,u=Depends(require_plugin('quotes'))):
     path=(VOICE/quote['audio']).resolve()
     if not path.is_relative_to(VOICE.resolve()) or not path.is_file(): raise HTTPException(404,'语音文件不存在')
     return FileResponse(path)
+
+from .quotes_history import current,router as history_router
+router.include_router(history_router)
 

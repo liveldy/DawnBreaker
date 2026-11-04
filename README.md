@@ -41,6 +41,7 @@ npm run dev
 
 ```powershell
 python scripts/fetch_native_components.py all
+python scripts/fetch_geodata.py
 npm run build
 npm run desktop:build
 npm run mobile:sync

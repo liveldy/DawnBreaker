@@ -38,7 +38,7 @@ def main():
             data=path.read_bytes()
             if token.encode() in data or any(p.search(data) for p in patterns):raise RuntimeError('Credential pattern found; file withheld: '+name)
         if git('diff','--cached','--name-only'):
-            git('commit','-m','Open source DawnBreaker across Windows, Android, Web and Server')
+            git('commit','-m','Update DawnBreaker to '+json.loads((ROOT/'package.json').read_text('utf8'))['version'])
         url='https://github.com/'+owner+'/'+NAME+'.git'
         remotes=git('remote').splitlines()
         if 'origin' not in remotes:git('remote','add','origin',url)
