@@ -17,6 +17,36 @@ API='https://wiki.biligame.com/sgs/api.php'
 INDEX='https://wiki.biligame.com/sgs/武将图鉴'
 
 def digest(text):return hashlib.sha256(text.encode()).hexdigest()[:24]
+
+ART_RECIPE='fullbleed-v2'
+CARD_SIZE=(360,540)
+
+def shared_skin_cards(cards):
+    """Only genuine shared-name skin series qualify; fixed classic groups stay."""
+    groups={}
+    for card in cards:
+        if card['world']=='皮肤珍藏':groups.setdefault(card['series'],set()).add(card['id'])
+    singletons={name for name,ids in groups.items() if len(ids)<2}
+    return [c for c in cards if c['world']!='皮肤珍藏' or c['series'] not in singletons],singletons
+
+def card_portrait(original,focus_x=.5):
+    """Fill the shared 2:3 frame without stretching or adding letterbox bands."""
+    image=ImageOps.exif_transpose(original)
+    if image.mode in ('RGBA','LA') or image.mode=='P' and 'transparency' in image.info:
+        rgba=image.convert('RGBA');bounds=rgba.getchannel('A').getbbox()
+        if bounds:rgba=rgba.crop(bounds)
+        background=Image.new('RGBA',rgba.size,'#151b1d');background.alpha_composite(rgba);image=background.convert('RGB')
+    else:image=image.convert('RGB')
+    ratio=image.width/image.height;target=CARD_SIZE[0]/CARD_SIZE[1]
+    if ratio>=1.05:
+        family='landscape';crop_w=image.height*target;crop_h=image.height;anchor_y=.5
+    elif ratio>=.735:
+        family='portrait-classic';crop_w=image.height*target;crop_h=image.height;anchor_y=.35
+    else:
+        family='portrait-poster';crop_w=min(image.width,image.height*target);crop_h=crop_w/target;anchor_y=.18
+    left=max(0,(image.width-crop_w)*focus_x);top=max(0,(image.height-crop_h)*anchor_y)
+    box=(left,top,left+crop_w,top+crop_h)
+    return image.resize(CARD_SIZE,Image.Resampling.LANCZOS,box=box),{'family':family,'crop':list(box),'source_size':list(image.size)}
 def plain(value):
     text=re.sub(r'<br\s*/?>','\n',str(value),flags=re.I)
     text=mwparserfromhell.parse(text).strip_code(normalize=True,collapse=True)
@@ -179,6 +209,13 @@ class Importer:
         return known
     def compile(self,metadata):
         infos=self.image_info(metadata['cards']);complete=[];missing=[]
+        eligible=[]
+        for card in metadata['cards']:
+            if any(infos.get(name) for name in card['file_candidates']):eligible.append(card)
+            else:missing.append({'page':card['wiki_title'],'version':card['version'],'reason':'no-static-image'})
+        candidates,singletons=shared_skin_cards(eligible)
+        omitted=[{'id':c['id'],'page':c['wiki_title'],'skin_name':c['series']} for c in eligible if c['world']=='皮肤珍藏' and c['series'] in singletons]
+        cache_file=self.source/'portrait-recipes.json';recipes=json.loads(cache_file.read_text('utf8')) if cache_file.exists() else {}
         for name in ('cards','splashes','posters'):(self.output/name).mkdir(parents=True,exist_ok=True)
         def render(card):
             match=next(((name,infos[name]) for name in card['file_candidates'] if infos.get(name)),None)
@@ -191,27 +228,35 @@ class Importer:
                 if len(response.content)>30*1024*1024:raise RuntimeError('Artwork too large')
                 temp=path.with_suffix('.partial');temp.write_bytes(response.content);temp.replace(path)
             portrait_path=self.output/'cards'/(card['id']+'.webp');splash_path=self.output/'splashes'/(card['id']+'.webp')
-            ready=portrait_path.exists() and splash_path.exists() and min(portrait_path.stat().st_mtime,splash_path.stat().st_mtime)>=path.stat().st_mtime
+            focus_x=.8 if card['name']=='乐蔡文姬 · 姝丽风华' else .5
+            recipe_key=ART_RECIPE+'|'+digest(url)+'|'+str(focus_x)
+            cached=recipes.get(card['id'],{})
+            ready=cached.get('key')==recipe_key and portrait_path.exists() and splash_path.exists() and min(portrait_path.stat().st_mtime,splash_path.stat().st_mtime)>=path.stat().st_mtime
             if ready:
                 with Image.open(portrait_path) as previous:ready=previous.size==(360,540)
             if not ready:
                 with Image.open(path) as original:
-                    image=ImageOps.exif_transpose(original).convert('RGB')
-                    if image.width<100 or image.height<100:return card,None,'too-small-artwork'
-                    portrait=ImageOps.pad(image,(360,540),method=Image.Resampling.LANCZOS,color='#151b1d',centering=(.5,.5))
+                    if original.width<100 or original.height<100:return card,None,'too-small-artwork'
+                    portrait,framing=card_portrait(original,focus_x)
                     portrait.save(portrait_path,'WEBP',quality=86)
-                    image.thumbnail((1920,1920));image.save(splash_path,'WEBP',quality=90)
+                    # Detail art is independent of the card crop and remains complete.
+                    if not splash_path.exists() or splash_path.stat().st_mtime<path.stat().st_mtime:
+                        image=ImageOps.exif_transpose(original).convert('RGB');image.thumbnail((1920,1920));image.save(splash_path,'WEBP',quality=90)
+                    recipes[card['id']]={'key':recipe_key,**framing}
             result={k:v for k,v in card.items() if k not in ('file_candidates','world','series','version')}
-            result.update(image='/api/plugins/collection/image/'+card['id'],splash='/api/plugins/collection/splash/'+card['id'],source_image=url,source_file=filename)
+            art_hash=hashlib.sha256(portrait_path.read_bytes()).hexdigest()[:12]
+            result.update(image='/api/plugins/collection/image/'+card['id']+'?v='+art_hash,splash='/api/plugins/collection/splash/'+card['id'],source_image=url,source_file=filename,art_framing=recipes[card['id']]['family'])
             return card,result,None
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            futures=[pool.submit(render,c) for c in metadata['cards']]
+            futures=[pool.submit(render,c) for c in candidates]
             for i,future in enumerate(as_completed(futures),1):
                 card,result,reason=future.result()
                 if reason:missing.append({'page':card['wiki_title'],'version':card['version'],'reason':reason})
                 else:complete.append((card,result))
                 if i%100==0 or i==len(futures):print('Artwork',i,'/',len(futures),'missing',len(missing),flush=True)
         complete.sort(key=lambda pair:pair[1]['id']);worlds={}
+        cache_file.write_text(json.dumps(recipes,ensure_ascii=False,indent=2),'utf8')
+        assert not shared_skin_cards([c for c,v in complete])[1],'An incomplete shared-skin series must not be published'
         order=['界限突破','一将成名','限定专属','威系列','谋定天下','星河璀璨','群英荟萃','皮肤珍藏']
         for card,value in complete:
             world=worlds.setdefault(card['world'],{})
@@ -227,13 +272,18 @@ class Importer:
         with Image.open(self.output/'splashes'/(cover['id']+'.webp')) as im:
             im=ImageOps.contain(im,(960,900),Image.Resampling.LANCZOS);poster.paste(im,(1600-im.width,(900-im.height)//2))
         poster.save(self.output/'posters/sgs.webp','WEBP',quality=90)
+        # The root album has a wide cover slot, not the draw banner's text field.
+        # Give it its own composition so phones do not crop an already padded banner.
+        with Image.open(self.output/'splashes'/(cover['id']+'.webp')) as im:
+            ImageOps.fit(im,(1360,800),Image.Resampling.LANCZOS,centering=(.8,.35)).save(self.output/'posters/sgs-album.webp','WEBP',quality=90)
+        album.update(album_poster='posters/sgs-album.webp',poster_revision=hashlib.sha256((self.output/'posters/sgs.webp').read_bytes()).hexdigest()[:12],album_poster_revision=hashlib.sha256((self.output/'posters/sgs-album.webp').read_bytes()).hexdigest()[:12])
         existing=json.loads((self.output/'cards.json').read_text('utf8'));existing['cards']=[c for c in existing['cards'] if c.get('album_id')!='sgs']+[v for _,v in complete]
         registry=json.loads((self.output/'card-albums.json').read_text('utf8'));registry['albums']=[a for a in registry['albums'] if a['id']!='sgs']+[album]
         for name,value in [('cards.json',existing),('card-albums.json',registry)]:
             tmp=self.output/(name+'.partial');tmp.write_text(json.dumps(value,ensure_ascii=False,indent=2),'utf8');tmp.replace(self.output/name)
-        report={k:v for k,v in metadata.items() if k!='cards'}|{'cards':len(complete),'worlds':{w:len(worlds[w]) for w in order if w in worlds},'rarities':dict(Counter(v['rarity'] for _,v in complete)),'missing_artwork':missing,'missing_stories':[v['wiki_title'] for _,v in complete if not v['description']],'image_size':[360,540],'normalization':'contain full original on a neutral matte; full artwork retained in splash'}
+        report={k:v for k,v in metadata.items() if k!='cards'}|{'cards':len(complete),'worlds':{w:len(worlds[w]) for w in order if w in worlds},'rarities':dict(Counter(v['rarity'] for _,v in complete)),'missing_artwork':missing,'missing_stories':[v['wiki_title'] for _,v in complete if not v['description']],'omitted_singletons':omitted,'singleton_series_removed':len(singletons),'image_size':list(CARD_SIZE),'art_framing':dict(Counter(v['art_framing'] for _,v in complete)),'normalization':'three aspect-ratio families, proportional full-bleed crop; full artwork retained in splash'}
         (self.source/'import-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),'utf8')
-        print(json.dumps({k:v for k,v in report.items() if k not in ('excluded','missing_artwork','missing_stories')},ensure_ascii=False),flush=True)
+        print(json.dumps({k:v for k,v in report.items() if k not in ('excluded','missing_artwork','missing_stories','omitted_singletons')},ensure_ascii=False),flush=True)
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--metadata-only',action='store_true');parser.add_argument('--workers',type=int,default=4);parser.add_argument('--browser',action='store_true',help='Read the public API with installed Chrome; requests are serialized at 1/s');args=parser.parse_args()

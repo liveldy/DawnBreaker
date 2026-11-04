@@ -1,5 +1,6 @@
 import json,secrets
 from pathlib import Path
+from typing import Literal
 from fastapi import APIRouter,Depends,HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel,Field
@@ -47,12 +48,12 @@ def image(card_id:str,u=Depends(user)):
     return FileResponse(media_path(ROOT,'cards/'+card_id+'.webp'),media_type='image/webp')
 
 @router.get('/poster/{pack_id}')
-def poster(pack_id:str,u=Depends(user)):
+def poster(pack_id:str,view:Literal['draw','album']='draw',u=Depends(user)):
     spec=find_spec(pack_id)
     with connect() as db:
         if not spec or not installed(db,u['id'],spec['content_plugin']):raise HTTPException(403,'尚未安装该卡册内容')
     if not spec.get('poster'):raise HTTPException(404,'尚未配置卡包海报')
-    return FileResponse(media_path(ROOT,spec['poster']),media_type='image/webp')
+    return FileResponse(media_path(ROOT,spec.get('album_poster',spec['poster']) if view=='album' else spec['poster']),media_type='image/webp')
 
 @router.get('')
 def get(u=Depends(user)):
@@ -63,10 +64,12 @@ def get(u=Depends(user)):
             if not installed(db,u['id'],spec['content_plugin']):continue
             pool=[c for c in cards if c['album_id']==spec['id']]
             album=tree_for(spec,pool,owned)
-            album['poster']='/api/plugins/collection/poster/'+spec['id'] if spec.get('poster') else album['cover']
+            poster_url='/api/plugins/collection/poster/'+spec['id']
+            draw_poster=poster_url+('?v='+spec['poster_revision'] if spec.get('poster_revision') else '')
+            album['poster']=(poster_url+'?view=album'+('&v='+spec['album_poster_revision'] if spec.get('album_poster_revision') else '')) if spec.get('album_poster') else draw_poster if spec.get('poster') else album['cover']
             albums.append(album)
             pack=pack_for(spec,CONFIG,db)
-            if pack and pool:packs.append(pack|{'poster':album['poster'],'cover':pack.get('cover') or album['cover'],'total':len(pool)})
+            if pack and pool:packs.append(pack|{'poster':draw_poster if spec.get('poster') else album['cover'],'cover':pack.get('cover') or album['cover'],'total':len(pool)})
         visible={c['id'] for c in cards}
         history=[h for h in state(db,u['id'],'collection','history',[]) if h['id'] in visible][:100]
         # Merge history with current metadata so old draws adopt the same album/card presentation.

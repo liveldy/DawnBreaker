@@ -13,10 +13,13 @@ def test_imported_sgs_complete_catalog_art_and_draw(client):
     install(client,'sgs','journal')
     data=client.get('/api/plugins/collection').json();album=data['albums'][0]
     assert album['id']=='sgs' and album['name']=='三国杀'
-    assert album['total']==len(data['cards'])==2123
+    assert album['total']==len(data['cards'])==942
     assert {c['rarity'] for c in data['cards']}=={'R','SR'}
     assert set(data['packs'][0]['probabilities'])=={'R','SR'}
     assert sum(data['packs'][0]['probabilities'].values())==100
+    assert '?view=album' in album['poster'] and '?view=album' not in data['packs'][0]['poster']
+    assert client.get(album['poster']).content!=client.get(data['packs'][0]['poster']).content
+    assert client.get('/api/plugins/collection/poster/sgs?view=unsupported').status_code==422
     worlds={n['name']:n for n in album['children']}
     assert set(worlds)=={'界限突破','一将成名','限定专属','威系列','谋定天下','星河璀璨','群英荟萃','皮肤珍藏'}
     assert {n['name'] for n in worlds['界限突破']['children']}=={'标准','一将成名','星火燎原'}
@@ -24,13 +27,14 @@ def test_imported_sgs_complete_catalog_art_and_draw(client):
     for world in album['children']:
         assert world['kind']=='universe'
         for series in world['children']:
-            assert series['kind']=='series' and series['total']>0
+            assert series['kind']=='series' and series['total']>=2
             members.update(series['card_ids'])
     assert members==set(cards)
     for card in cards.values():
         with Image.open(collection.ROOT/'cards'/(card['id']+'.webp')) as image:assert image.size==(360,540)
         assert (collection.ROOT/'splashes'/(card['id']+'.webp')).is_file()
         assert card['character_name'] and card['source_url'].startswith('https://wiki.biligame.com/sgs/')
+        assert '?v=' in card['image'] and card['art_framing'] in ('landscape','portrait-classic','portrait-poster')
     sample=next(c for c in cards.values() if c['rarity']=='SR')
     assert client.get(sample['image']).status_code==200
     assert client.get(sample['splash']).status_code==200
