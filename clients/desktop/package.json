@@ -1,0 +1,9 @@
+{
+  "name": "dawnbreaker-desktop",
+  "version": "1.2.0",
+  "description": "破晓个人工具集桌面端",
+  "main": "main.cjs",
+  "author": "DawnBreaker",
+  "license": "AGPL-3.0-or-later",
+  "dawnReleaseSequence": 9
+}

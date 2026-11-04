@@ -1,0 +1,10 @@
+from pathlib import Path
+p=Path(__file__).resolve().parents[1]/'tests/test_api.py';s=p.read_text(encoding='utf-8')
+s=s.replace("client.get('/api/plugins/collection').json()['points']==5","client.get('/api/plugins/collection').json()['essence']==15")
+s=s.replace("client.get('/api/plugins/collection').json()['points']==0","client.get('/api/plugins/collection').json()['essence']==0")
+s=s.replace("client.get('/api/plugins/collection').json()['points']==1","client.get('/api/plugins/collection').json()['essence']==0")
+s=s.replace("credit(conn,uid,'collection',100","credit(conn,uid,'essence',100")
+s=s.replace("data['points']==0","data['essence']==0")
+s=s.replace("{'essence':200,'stones':12,'climb':30,'collection':50,'reason':'管理测试'}","{'essence':200,'stones':12,'reason':'管理测试'}")
+p.write_text(s,encoding='utf-8')
+p=Path(__file__).resolve().parents[1]/'scripts/smoke_remote.py';s=p.read_text(encoding='utf-8').replace("points=get('/plugins/collection')['points'];assert points>=20","points=get('/plugins/collection')['essence'];assert points>=20").replace("get('/plugins/collection')['points']==points-10","get('/plugins/collection')['essence']==points-10");p.write_text(s,encoding='utf-8')

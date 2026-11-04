@@ -1,0 +1,1 @@
+const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('dawnCloud',Object.freeze({request:o=>ipcRenderer.invoke('cloud:request',o),clipboard:text=>ipcRenderer.invoke('cloud:clipboard',text),open:url=>ipcRenderer.invoke('cloud:open',url),download:o=>ipcRenderer.invoke('cloud:download',o)}));

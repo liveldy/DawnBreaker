@@ -1,0 +1,20 @@
+from pathlib import Path
+R=Path(__file__).resolve().parents[1];D=R/'clients/desktop'
+icons={'previous':'<path d="m19 20-9-8 9-8v16Z"/><path d="M5 19V5"/>','next':'<path d="m5 4 10 8-10 8V4Z"/><path d="M19 5v14"/>','play':'<path d="m6 3 14 9-14 9V3Z"/>','pause':'<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>','voice':'<path d="m11 5-5 4H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.08M19.07 4.93a10 10 0 0 1 0 14.14"/>'}
+def svg(name):return '<svg data-icon="'+name+'" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+icons[name]+'</svg>'
+p=D/'widget.html';s=p.read_text(encoding='utf-8').replace("img-src 'self'","img-src 'self'; media-src blob:")
+s=s.replace('<p id="author">流光笺</p>','<div class="quote-footer"><p id="author">流光笺</p><button id="voice" aria-label="播放语录" title="播放语录" hidden>'+svg('voice')+'</button></div><audio id="voice-audio" hidden></audio>')
+s=s.replace('aria-label="上一首">上一首</button>','aria-label="上一首">'+svg('previous')+'</button>').replace('aria-label="下一首">下一首</button>','aria-label="下一首">'+svg('next')+'</button>').replace('aria-label="播放或暂停">播放</button>','aria-label="播放或暂停">'+svg('play')+svg('pause')+'</button>')
+s=s.replace('</style>','.quote-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}.quote-footer>p{flex:1}.quote-footer button{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px}.quote-footer button[hidden],svg[hidden]{display:none}#toggle{min-width:42px;display:flex;align-items:center;justify-content:center}#toggle svg[data-icon=pause]{display:none}.controls button{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:5px}button svg{pointer-events:none}</style>')
+p.write_text(s,encoding='utf-8')
+(D/'widget.js').write_text('''const music=new URLSearchParams(location.search).get('kind')==='music';
+document.getElementById('label').textContent=music?'弦音余韵':'流光笺';document.getElementById('music').hidden=!music;document.getElementById('quote').hidden=music;
+for(const id of ['open','close','previous','toggle','next','voice'])document.getElementById(id).onclick=()=>window.dawnWidget?.command(id);
+window.dawnWidget?.onState(({state,quote})=>{for(const [id,value] of Object.entries({name:state.name,artist:state.artist,text:quote.text,author:quote.author}))document.getElementById(id).textContent=value||'';document.getElementById('voice').hidden=!quote.audio;const button=document.getElementById('toggle');button.setAttribute('aria-label',state.playing?'暂停':'播放');button.querySelector('[data-icon=play]').style.display=state.playing?'none':'';button.querySelector('[data-icon=pause]').style.display=state.playing?'block':'none';});
+let voiceURL;window.dawnWidget?.onVoice(value=>{if(value.error){document.getElementById('voice').title=value.error;return;}if(voiceURL)URL.revokeObjectURL(voiceURL);voiceURL=URL.createObjectURL(new Blob([value.bytes],{type:'audio/mpeg'}));const player=document.getElementById('voice-audio');player.src=voiceURL;player.play().catch(()=>{});});
+''',encoding='utf-8')
+p=D/'media.cjs';s=p.read_text(encoding='utf-8').replace("new URL('/api/plugins/quotes',target).href","'dawn://app/api/plugins/quotes'")
+old="else if(['toggle','next','previous'].includes(value))command(value);"
+new="""else if(value==='voice'&&/^\\/api\\/plugins\\/quotes\\/audio\\/[A-Za-z0-9_-]+$/.test(quote.audio||'')){const sender=e.sender;getWindow().webContents.session.fetch('dawn://app'+quote.audio,{credentials:'include'}).then(async r=>{if(!r.ok)throw Error();const bytes=new Uint8Array(await r.arrayBuffer());if(bytes.length>8*1024*1024)throw Error();if(!sender.isDestroyed())sender.send('widget:voice',{bytes});}).catch(()=>{if(!sender.isDestroyed())sender.send('widget:voice',{error:'语录暂时无法播放'});});}else if(['toggle','next','previous'].includes(value))command(value);"""
+assert old in s;s=s.replace(old,new);p.write_text(s,encoding='utf-8')
+print('Updated desktop widget speaker and matching playback icons')

@@ -1,0 +1,7 @@
+from pathlib import Path
+R=Path(__file__).resolve().parents[1]
+p=R/'src/App.tsx';s=p.read_text(encoding='utf-8').replace('查看递进目标与奖励','查看成就里程碑');p.write_text(s,encoding='utf-8')
+p=R/'src/CardFace.tsx';s=p.read_text(encoding='utf-8');old='<span className="card-lettering"><strong>{name}</strong>';new='<span className="card-lettering">{rarityIcon&&<img className="rarity-art" src={rarityIcon} alt="品质标识"/>}<strong>{name}</strong>';s=s.replace(old,new).replace('{rarityIcon?<img className="rarity-art" src={rarityIcon} alt="品质标识"/>:!rarity&&<span className="card-grade">{grade}</span>}','{!rarity&&<span className="card-grade">{grade}</span>}');p.write_text(s,encoding='utf-8')
+p=R/'src/update-mobile-fixes.css';s=p.read_text(encoding='utf-8')+'\n.quote-credit{display:flex;align-items:center;justify-content:space-between;gap:15px}.quote-credit .quote-voice{flex:none;min-width:44px;min-height:44px}.card-lettering .rarity-art{margin-top:0;margin-bottom:3px}\n';p.write_text(s,encoding='utf-8')
+p=R/'website/index.html';s=p.read_text(encoding='utf-8').replace('破晓 · 珍藏阁','破晓 · 插件商城').replace('assets/draw-mobile.webp','assets/tools.webp').replace('width="390" height="840"','width="1112" height="510"').replace('珍藏阁界面，灵魂莲华阿狸卡包与单抽、十连抽按钮','破晓插件商城，按需开启自己的日常工具').replace('每一天，都有新的相遇。','需要什么，就开启什么。').replace('角色美术版权归原权利方所有。','按需安装 · 同步到你的个人空间');p.write_text(s,encoding='utf-8')
+p=R/'website/site.css';s=p.read_text(encoding='utf-8')+'\n.preview .product{width:100%;height:auto;max-height:72vh;object-fit:contain}\n';p.write_text(s,encoding='utf-8')

@@ -1,0 +1,2 @@
+import {useState}from'react';import type{User}from'./api';
+export default function Avatar({user,className=''}:{user:User;className?:string}){const[failed,setFailed]=useState('');return <span className={'avatar '+className}>{user.avatar_url&&failed!==user.avatar_url?<img src={user.avatar_url} alt={user.nickname+'的头像'} onError={()=>setFailed(user.avatar_url||'')}/>:user.nickname.slice(0,1)}</span>;}

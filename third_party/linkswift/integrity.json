@@ -1,0 +1,26 @@
+{
+  "jquery.js": {
+    "url": "https://unpkg.com/jquery@3.6.0/dist/jquery.min.js",
+    "sha256": "ff1523fb7389539c84c65aba19260648793bb4f5e29329d2ee8804bc37a3fe6e"
+  },
+  "sweetalert.js": {
+    "url": "https://unpkg.com/sweetalert2@11.4.8/dist/sweetalert2.min.js",
+    "sha256": "8c80ad67878fb50120f124f112bf665e7804452332970d3279b571b13a26d910"
+  },
+  "light.css": {
+    "url": "https://unpkg.com/sweetalert2@11.4.8/dist/sweetalert2.min.css",
+    "sha256": "7f14f6bc43e2ad8d80481341142056c04b0bc426497778237a7d3743694a78a1"
+  },
+  "dark.css": {
+    "url": "https://unpkg.com/@sweetalert2/theme-dark@5.0.26/dark.min.css",
+    "sha256": "3e9cc574e98e93b8409b6d0556e51062e663cc47e103e3d89e2e92f6df384d68"
+  },
+  "md5.js": {
+    "url": "https://unpkg.com/js-md5@0.7.3/build/md5.min.js",
+    "sha256": "31d57206075645a34f442e3a56d5d2b445e437cf99739889bc1d65662b02bc31"
+  },
+  "sha256.js": {
+    "url": "https://unpkg.com/js-sha256@0.11.1/src/sha256.js",
+    "sha256": "2db6c8e554fbee14672368a0d7551a8ddd841ee96c91526eb7987a0179cfc717"
+  }
+}

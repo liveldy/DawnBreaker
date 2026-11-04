@@ -1,0 +1,24 @@
+[Unit]
+Description=DawnBreaker API
+After=network.target
+
+[Service]
+Type=simple
+User=dawnbreaker
+Group=dawnbreaker
+WorkingDirectory=/opt/dawnbreaker/current
+Environment=DAWN_DATA_DIR=/var/lib/dawnbreaker
+Environment=DAWN_SERVE_WEB=0
+Environment=DAWN_SECURE_COOKIES=0
+ExecStart=/opt/dawnbreaker/venv/bin/uvicorn server.main:app --host 0.0.0.0 --port 7779 --workers 1 --no-proxy-headers
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dawnbreaker
+
+[Install]
+WantedBy=multi-user.target

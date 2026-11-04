@@ -1,0 +1,35 @@
+{
+  "appId": "app.dawnbreaker.desktop",
+  "productName": "DawnBreaker",
+  "electronDist": "node_modules/electron/dist",
+  "directories": {
+    "app": "clients/desktop",
+    "output": "release/desktop"
+  },
+  "files": [
+    "*.cjs",
+    "window-layer.ps1",
+    "wallpaper-layer.ps1",
+    "splash.html",
+    "!node_modules/**",
+    "update-public.pem",
+    "offline.html",
+    "icon.ico",
+    "package.json",
+    "widget.html",
+    "widget.js",
+    "web/**"
+  ],
+  "extraResources": [{"from":"clients/desktop/bin","to":"bin","filter":["mihomo.exe"]},{"from":"third_party","to":"third_party"}],
+  "win": {
+    "target": [
+      "portable"
+    ],
+    "icon": "public/icon.ico",
+    "signAndEditExecutable": false,
+    "artifactName": "DawnBreaker-${version}-Windows.${ext}"
+  },
+  "portable": {
+    "artifactName": "DawnBreaker-${version}-Windows.exe"
+  }
+}

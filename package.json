@@ -1,0 +1,46 @@
+{
+  "name": "dawnbreaker",
+  "private": true,
+  "version": "1.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "desktop": "electron clients/desktop/main.cjs",
+    "desktop:build": "node scripts/prepare_desktop.mjs && electron-builder --win portable --config clients/desktop/builder.json",
+    "mobile:sync": "cap sync android && node scripts/prepare_android.mjs",
+    "mobile:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.0",
+    "@capacitor/core": "^7.4.0",
+    "@fontsource/instrument-sans": "^5.2.0",
+    "@fontsource/instrument-serif": "^5.2.0",
+    "@noble/ciphers": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "fflate": "^0.8.3",
+    "katex": "^0.19.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.2.0"
+  },
+  "dawnReleaseSequence": 9,
+  "license": "AGPL-3.0-or-later"
+}

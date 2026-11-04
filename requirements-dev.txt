@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest==9.2.0
+paramiko==5.1.0
+xlrd==2.0.2
+pillow==13.0.0
+mutagen==1.47.0
+

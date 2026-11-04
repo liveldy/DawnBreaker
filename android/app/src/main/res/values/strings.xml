@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="wallpaper_description">浮光掠影 · 视频与网页动态壁纸</string>
+    <string name="app_name">破晓</string>
+    <string name="title_activity_main">破晓</string>
+    <string name="package_name">app.dawnbreaker.mobile</string>
+    <string name="custom_url_scheme">app.dawnbreaker.mobile</string>
+</resources>
