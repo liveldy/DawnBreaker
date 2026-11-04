@@ -5,7 +5,7 @@ import httpx
 from release_common import VERSION,NOTES
 
 root=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('action',choices=['reset-old','release','website','status']);parser.add_argument('--repo',choices=['dawnbreaker-website','dawnbreaker'],default='dawnbreaker-website');args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('action',choices=['reset-old','release','website','status']);parser.add_argument('--repo',choices=['dawnbreaker-website','dawnbreaker-app'],default='dawnbreaker-website');args=parser.parse_args()
 if args.action=='website' and args.repo!='dawnbreaker-website':raise SystemExit('Website publication stays in the website repository')
 token=getpass.getpass('GitHub token (hidden): ')
 client=httpx.Client(base_url='https://api.github.com',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},trust_env=False,timeout=60)
@@ -63,7 +63,7 @@ if args.action=='release':
     for file in files:
         if not file.is_file():raise RuntimeError('Missing release artifact: '+file.name)
     source_archive=root/'release'/f'DawnBreaker-{version}-ThirdPartySources.zip'
-    if args.repo=='dawnbreaker':
+    if args.repo=='dawnbreaker-app':
         if not source_archive.is_file():raise RuntimeError('Missing corresponding third-party source archive')
         files.append(source_archive)
     checksums=root/'release/SHA256SUMS.txt'

@@ -2,7 +2,7 @@
 
 以插件组成的个人工具集，支持网页、Windows 与 Android，共用账号、数据和界面代码。
 
-[官网下载](https://liveldy.github.io/dawnbreaker-website/) · [网页版](http://110.42.63.153:7780) · [源码](https://github.com/liveldy/dawnbreaker) · [发布版](https://github.com/liveldy/dawnbreaker/releases)
+[官网下载](https://liveldy.github.io/dawnbreaker-website/) · [网页版](http://110.42.63.153:7780) · [源码](https://github.com/liveldy/dawnbreaker-app) · [发布版](https://github.com/liveldy/dawnbreaker-app/releases)
 
 ## 仓库结构
 

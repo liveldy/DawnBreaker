@@ -3,7 +3,7 @@ import base64,getpass,json,os,re,subprocess,sys
 from pathlib import Path
 import httpx
 ROOT=Path(__file__).resolve().parents[1]
-NAME='dawnbreaker'
+NAME='dawnbreaker-app'
 def git(*args,env=None):
     r=subprocess.run(['git',*args],cwd=ROOT,env=env,capture_output=True)
     if r.returncode:raise RuntimeError('Git operation failed: '+args[0]+'; '+r.stderr.decode('utf8','replace')[:300])
@@ -12,11 +12,15 @@ def main():
     token=getpass.getpass('GitHub token (hidden): ')
     with httpx.Client(base_url='https://api.github.com',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},timeout=60,trust_env=False) as c:
         r=c.get('/user');r.raise_for_status();owner=r.json()['login'];repo='/repos/'+owner+'/'+NAME
+        statefile=ROOT/'.local/source-repo.json'
+        state=json.loads(statefile.read_text('utf8')) if statefile.exists() else {}
         r=c.get(repo)
         if r.status_code==404:
             r=c.post('/user/repos',json={'name':NAME,'description':'破晓 DawnBreaker · Windows / Android / Web / Server · AGPL-3.0-or-later','private':False,'auto_init':False,'has_wiki':False,'has_projects':False});r.raise_for_status()
+            statefile.parent.mkdir(exist_ok=True);statefile.write_text(json.dumps({'id':r.json()['id'],'name':NAME}),encoding='utf8')
         else:
             r.raise_for_status()
+            if state.get('id')!=r.json()['id'] or state.get('name')!=NAME:raise RuntimeError('Repository already exists and was not created for this task; no changes made')
             if r.json()['private']:raise RuntimeError('Existing repository visibility differs; no changes made')
         if NAME=='dawnbreaker-website':raise RuntimeError('Website repository is not a source target')
         if not (ROOT/'.git').exists():git('init','-b','main')
