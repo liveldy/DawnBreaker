@@ -11,5 +11,6 @@ jobs:
         with: {python-version: '3.12'}
       - run: npm ci
       - run: npm run build
+      - run: node tests/atlas_labels.mjs
       - run: pip install -r requirements-dev.txt
       - run: python scripts/source_smoke.py

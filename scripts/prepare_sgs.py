@@ -220,7 +220,9 @@ class Importer:
         children=[{'id':'sgs-world-'+digest(w),'name':w,'kind':'universe','children':list(worlds[w].values())} for w in order if w in worlds]
         album={'id':'sgs','name':'三国杀','kind':'album','description':'以武将包和同名皮肤归档。来源：哔哩哔哩游戏三国杀 BWIKI。','content_plugin':'sgs','poster':'posters/sgs.webp','children':children,'pack':{'title':'群英入卷','subtitle':'三国杀','caption':'一页风云，一面故人。','art_caption':'三国杀 · 经典武将与皮肤','probabilities':{'R':80,'SR':20}}}
         # A real portrait at the right leaves a plain field for the existing poster's text.
-        cover=next((v for _,v in complete if v['character_name']=='神貂蝉' and v['skin_name']=='经典形象'),complete[0][1]);album['cover_card_id']=cover['id']
+        cover=next((v for _,v in complete if v['character_name']=='乐蔡文姬' and v['skin_name']=='姝丽风华'),None)
+        if not cover:raise RuntimeError('Requested cover artwork missing: 乐蔡文姬 · 姝丽风华')
+        album['cover_card_id']=cover['id'];album['pack']['art_caption']='姝丽风华 · 乐蔡文姬';album['pack']['subtitle']='乐蔡文姬'
         poster=Image.new('RGB',(1600,900),'#151b1d')
         with Image.open(self.output/'splashes'/(cover['id']+'.webp')) as im:
             im=ImageOps.contain(im,(960,900),Image.Resampling.LANCZOS);poster.paste(im,(1600-im.width,(900-im.height)//2))
