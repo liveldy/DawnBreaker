@@ -46,7 +46,7 @@ def question(mode:str=Query(default='learn',pattern='^(learn|spell|choice|review
         if queue:
             batch=current_batch(db,u['id'],words(db,u['id']),'kaoyan' if installed(db,u['id'],'kaoyan') else 'sample');pool=batch_eligible(batch,words(db,u['id']),memory);mode={'learn':'learn','test':'spell','review':'review-spell'}.get(batch['phase'],'learn');review=mode.startswith('review-')
         remaining=[w for w in pool if w['name'] not in tested] if not review else [w for w in pool if memory.get(w['name'],{}).get('review_day')!=today()]
-        if not pool:return {'empty':True,'message':'已学习或测试的词汇会出现在这里。' if review else '当前词库已全部记忆。'}
+        if not pool:return {'empty':True,'message':'本批次今日复习已完成，明天继续；需连续复习三天。' if queue and review and batch['words'] else '已学习或测试的词汇会出现在这里。' if review else '当前词库已全部记忆。'}
         if not pool: raise HTTPException(409,'词库为空，请联系管理员补充内容')
         word=secrets.choice(remaining or pool)
         choices=[]

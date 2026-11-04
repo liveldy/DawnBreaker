@@ -49,6 +49,9 @@ def main():
             r=c.put(repo+'/contents/README.md',json={'message':'Initialize open-source DawnBreaker repository','content':base64.b64encode((ROOT/'README.md').read_bytes()).decode(),'branch':'main'});r.raise_for_status()
             r=c.get(repo+'/git/ref/heads/main')
         r.raise_for_status();parent=r.json()['object']['sha']
+        previous=c.get(repo+'/git/commits/'+parent);previous.raise_for_status()
+        previous=c.get(repo+'/git/trees/'+previous.json()['tree']['sha'],params={'recursive':1});previous.raise_for_status()
+        existing={f['sha'] for f in previous.json()['tree'] if f['type']=='blob'}
         entries=git('ls-tree','-r','-z','HEAD').split('\x00');tree=[]
         for entry in filter(None,entries):
             metadata,name=entry.split('\t',1);mode,kind,sha=metadata.split();tree.append({'path':name,'mode':mode,'type':kind,'sha':sha})
@@ -57,7 +60,7 @@ def main():
             data=subprocess.check_output(['git','cat-file','blob',sha],cwd=ROOT)
             response=c.post(repo+'/git/blobs',json={'encoding':'base64','content':base64.b64encode(data).decode()});response.raise_for_status()
             if response.json()['sha']!=sha:raise RuntimeError('Blob hash mismatch')
-        with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(blob,unique))
+        with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(blob,unique-existing))
         r=c.post(repo+'/git/trees',json={'tree':tree});r.raise_for_status();tree_sha=r.json()['sha']
         if tree_sha!=git('rev-parse','HEAD^{tree}'):raise RuntimeError('Source tree verification failed')
         r=c.post(repo+'/git/commits',json={'message':'Publish reviewed DawnBreaker source for all platforms','tree':tree_sha,'parents':[parent] if parent else []});r.raise_for_status();sha=r.json()['sha']

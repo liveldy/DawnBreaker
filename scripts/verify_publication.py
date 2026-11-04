@@ -3,7 +3,8 @@ import hashlib,json,time
 from pathlib import Path
 import httpx
 from release_common import VERSION,ROOT
-repo='https://api.github.com/repos/liveldy/dawnbreaker-website'
+repo='https://api.github.com/repos/liveldy/DawnBreaker'
+website_repo='https://api.github.com/repos/liveldy/dawnbreaker-website'
 site='https://liveldy.github.io/dawnbreaker-website/'
 with httpx.Client(trust_env=False,timeout=30,headers={'Cache-Control':'no-cache'}) as c:
     release=c.get(repo+'/releases/latest');release.raise_for_status();release=release.json()
@@ -12,11 +13,11 @@ with httpx.Client(trust_env=False,timeout=30,headers={'Cache-Control':'no-cache'
     for folder,suffix in [('desktop','Windows.exe'),('android','Android.apk')]:
         file=ROOT/'release'/folder/f'DawnBreaker-{VERSION}-{suffix}'
         assert assets[file.name]['digest']=='sha256:'+hashlib.sha256(file.read_bytes()).hexdigest()
-    tree=c.get(repo+'/git/trees/main',params={'recursive':1});tree.raise_for_status()
+    tree=c.get(website_repo+'/git/trees/main',params={'recursive':1});tree.raise_for_status()
     paths={f['path'] for f in tree.json()['tree'] if f['type']=='blob'}
     expected={'index.html','site.css','site.js','.nojekyll','README.md'}|{'assets/'+p.name for p in (ROOT/'website/assets').iterdir() if p.is_file()}
     assert paths==expected,(paths-expected,expected-paths)
-    print('PASS: latest GitHub Release '+VERSION+'; both binary SHA256 digests match; repository has only '+str(len(paths))+' website files',flush=True)
+    print('PASS: latest GitHub Release '+VERSION+'; both binary SHA256 digests match; website repository has only '+str(len(paths))+' website files',flush=True)
     for attempt in range(40):
         r=c.get(site);r.raise_for_status()
         if r.content==(ROOT/'website/index.html').read_bytes():break
