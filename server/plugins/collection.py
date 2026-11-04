@@ -66,7 +66,7 @@ def get(u=Depends(user)):
             album['poster']='/api/plugins/collection/poster/'+spec['id'] if spec.get('poster') else album['cover']
             albums.append(album)
             pack=pack_for(spec,CONFIG,db)
-            if pack and pool:packs.append(pack|{'poster':album['poster'],'cover':album['cover'],'total':len(pool)})
+            if pack and pool:packs.append(pack|{'poster':album['poster'],'cover':pack.get('cover') or album['cover'],'total':len(pool)})
         visible={c['id'] for c in cards}
         history=[h for h in state(db,u['id'],'collection','history',[]) if h['id'] in visible][:100]
         # Merge history with current metadata so old draws adopt the same album/card presentation.
