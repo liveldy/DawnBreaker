@@ -5,7 +5,7 @@ import httpx
 from release_common import VERSION,NOTES
 
 root=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('action',choices=['reset-old','release','website','status']);parser.add_argument('--desktop-dir',type=Path,default=root/'release/desktop');parser.add_argument('--repo',choices=['dawnbreaker-website','DawnBreaker'],default='dawnbreaker-website');args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('action',choices=['reset-old','release','website','status']);parser.add_argument('--desktop-dir',type=Path,default=root/'release/desktop');parser.add_argument('--repo',choices=['dawnbreaker-website','DawnBreaker'],default='dawnbreaker-website');parser.add_argument('--repair-metadata',action='store_true',help='Repair signed JSON/checksums only after confirming published binaries are identical');args=parser.parse_args()
 if args.action=='website' and args.repo!='dawnbreaker-website':raise SystemExit('Website publication stays in the website repository')
 token=getpass.getpass('GitHub token (hidden): ')
 client=httpx.Client(base_url='https://api.github.com',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},trust_env=False,timeout=60)
@@ -61,6 +61,9 @@ if args.action=='reset-old':
     state.pop('release',None)
 
 if args.action=='release':
+    from release_common import VERSION_CODE
+    from release_artifacts import verify_manifests
+    verify_manifests(root,VERSION,VERSION_CODE,args.desktop_dir)
     version=VERSION;tag='v'+version
     files=[args.desktop_dir/f'DawnBreaker-{version}-Windows.exe',root/'release/android'/f'DawnBreaker-{version}-Android.apk',root/'release'/f'windows-{version}.json',root/'release'/f'android-{version}.json']
     for file in files:
@@ -79,6 +82,11 @@ if args.action=='release':
     elif response.is_success:release=response.json()
     else:raise RuntimeError('Unable to read release')
     existing={asset['name']:asset for asset in request('GET',repo+f"/releases/{release['id']}/assets")}
+    if args.repair_metadata:
+        for file in files:
+            if file.suffix not in ('.exe','.apk','.zip'):continue
+            asset=existing.get(file.name)
+            if not asset or asset['size']!=file.stat().st_size or asset.get('digest')!='sha256:'+hashlib.sha256(file.read_bytes()).hexdigest():raise RuntimeError('Metadata repair cannot change a published binary: '+file.name)
     for file in files:
         digest=hashlib.sha256(file.read_bytes()).hexdigest()
         if file.name in existing:
@@ -86,7 +94,7 @@ if args.action=='release':
             if asset['size']==file.stat().st_size and asset.get('digest')=='sha256:'+digest:
                 print('Verified existing asset '+file.name,flush=True);continue
             # This is our draft release and the exact fixed artifact filename only.
-            if not release['draft']:raise RuntimeError('Published asset differs; create a new version instead: '+file.name)
+            if not release['draft'] and not (args.repair_metadata and file.name in (f'windows-{version}.json',f'android-{version}.json','SHA256SUMS.txt')):raise RuntimeError('Published asset differs; create a new version instead: '+file.name)
             request('DELETE',repo+'/releases/assets/'+str(asset['id']))
         print('Uploading '+file.name+' ('+str(file.stat().st_size)+' bytes)',flush=True)
         with file.open('rb') as stream:
