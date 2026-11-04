@@ -2,6 +2,9 @@ package app.dawnbreaker.mobile;
 import static org.junit.Assert.*;import org.junit.Test;import org.junit.runner.RunWith;import org.robolectric.RobolectricTestRunner;import org.robolectric.RuntimeEnvironment;import org.robolectric.annotation.Config;import org.json.*;import java.io.*;import java.nio.charset.StandardCharsets;import java.util.*;import org.yaml.snakeyaml.Yaml;
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class DeviceToolsTest{
+ @Test public void cloudMessagesAreMainFrameAndOriginScoped(){
+  assertTrue(DawnCloudActivity.messageAllowed(android.net.Uri.parse("https://pan.baidu.com"),true));assertFalse(DawnCloudActivity.messageAllowed(android.net.Uri.parse("https://pan.baidu.com"),false));assertFalse(DawnCloudActivity.messageAllowed(android.net.Uri.parse("https://pan.baidu.com.evil.example"),true));assertFalse(DawnCloudActivity.messageAllowed(android.net.Uri.parse("http://pan.baidu.com"),true));assertFalse(DawnCloudActivity.messageAllowed(android.net.Uri.parse("https://pan.baidu.com:8443"),true));
+ }
  @Test public void wallpaperStateIsReadFromDiskAndKeepsIndependentFields()throws Exception{
   android.content.Context c=RuntimeEnvironment.getApplication();WallpaperState.update(c,new JSONObject().put("active","first").put("paused",false));WallpaperState.update(c,new JSONObject().put("candidate","second"));assertEquals("first",WallpaperState.read(c).getString("active"));assertEquals("second",WallpaperState.read(c).getString("candidate"));WallpaperState.update(c,new JSONObject().put("paused",true));assertTrue(WallpaperState.read(c).getBoolean("paused"));
  }

@@ -29,7 +29,7 @@ def request_json(url,body=None,headers=None,params=None):
     conn=Pinned(parsed.hostname,port,timeout=120,context=ssl.create_default_context())
     try:
         payload=json.dumps(body,ensure_ascii=False).encode('utf-8') if body is not None else None
-        conn.request('POST' if body is not None else 'GET',(parsed.path or '/')+('?' + urlencode(params,doseq=True) if params else ''),body=payload,headers={'Accept':'application/json','Content-Type':'application/json','User-Agent':'DawnBreaker/1.2.0',**(headers or {})})
+        conn.request('POST' if body is not None else 'GET',(parsed.path or '/')+('?' + urlencode(params,doseq=True) if params else ''),body=payload,headers={'Accept':'application/json','Content-Type':'application/json','User-Agent':'DawnBreaker/1.2.1',**(headers or {})})
         response=conn.getresponse();data=response.read(16*1024*1024+1)
         if response.status<200 or response.status>=300:raise HTTPException(502,'模型 API 返回 HTTP '+str(response.status)+'，请检查接口、密钥和模型 ID')
         if len(data)>16*1024*1024:raise HTTPException(502,'API 返回内容过大')

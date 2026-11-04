@@ -10,7 +10,10 @@ if args.action=='website' and args.repo!='dawnbreaker-website':raise SystemExit(
 token=getpass.getpass('GitHub token (hidden): ')
 client=httpx.Client(base_url='https://api.github.com',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},trust_env=False,timeout=60)
 def request(method,path,**kwargs):
-    response=client.request(method,path,**kwargs)
+    for attempt in range(4):
+        response=client.request(method,path,**kwargs)
+        if response.status_code not in (429,500,502,503,504) or attempt==3:break
+        time.sleep(2**attempt)
     if not response.is_success:
         try: message=response.json().get('message','Request failed')
         except ValueError: message='Request failed'

@@ -4,6 +4,6 @@
 
 访问官网：https://liveldy.github.io/dawnbreaker-website/
 
-Windows 和 Android 安装包位于本仓库的 GitHub Releases。此仓库不包含破晓应用程序源码或用户数据。
+新版 Windows 和 Android 安装包与程序源码位于 https://github.com/liveldy/DawnBreaker 。本站仓库只存放官网文件，保留既有历史发布，不包含应用源码或用户数据。
 
 网页界面图片来自破晓测试账号。界面中的英雄联盟角色美术版权归原权利方所有。Instrument Sans 字体使用 SIL Open Font License，见 assets/OFL.txt。
