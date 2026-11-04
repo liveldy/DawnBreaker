@@ -2,6 +2,7 @@
 import base64,getpass,json,os,re,subprocess,sys
 from pathlib import Path
 import httpx
+from concurrent.futures import ThreadPoolExecutor
 ROOT=Path(__file__).resolve().parents[1]
 NAME='DawnBreaker'
 def git(*args,env=None):
@@ -42,11 +43,28 @@ def main():
         remotes=git('remote').splitlines()
         if 'origin' not in remotes:git('remote','add','origin',url)
         elif git('remote','get-url','origin')!=url:raise RuntimeError('Existing origin differs; no remote overwritten')
-        auth=base64.b64encode(('x-access-token:'+token).encode()).decode()
-        env=os.environ.copy();env.update(GIT_CONFIG_COUNT='1',GIT_CONFIG_KEY_0='http.https://github.com/.extraheader',GIT_CONFIG_VALUE_0='AUTHORIZATION: basic '+auth,GIT_TERMINAL_PROMPT='0')
-        git('-c','http.version=HTTP/1.1','push','-u','origin','main',env=env)
-        sha=git('rev-parse','HEAD');r=c.get(repo+'/commits/main');r.raise_for_status()
+        # REST Git objects avoid interactive credential helpers and unreliable large smart-HTTP pushes.
+        r=c.get(repo+'/git/ref/heads/main')
+        if r.status_code in (404,409):
+            r=c.put(repo+'/contents/README.md',json={'message':'Initialize open-source DawnBreaker repository','content':base64.b64encode((ROOT/'README.md').read_bytes()).decode(),'branch':'main'});r.raise_for_status()
+            r=c.get(repo+'/git/ref/heads/main')
+        r.raise_for_status();parent=r.json()['object']['sha']
+        entries=git('ls-tree','-r','-z','HEAD').split('\x00');tree=[]
+        for entry in filter(None,entries):
+            metadata,name=entry.split('\t',1);mode,kind,sha=metadata.split();tree.append({'path':name,'mode':mode,'type':kind,'sha':sha})
+        unique={e['sha'] for e in tree}
+        def blob(sha):
+            data=subprocess.check_output(['git','cat-file','blob',sha],cwd=ROOT)
+            response=c.post(repo+'/git/blobs',json={'encoding':'base64','content':base64.b64encode(data).decode()});response.raise_for_status()
+            if response.json()['sha']!=sha:raise RuntimeError('Blob hash mismatch')
+        with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(blob,unique))
+        r=c.post(repo+'/git/trees',json={'tree':tree});r.raise_for_status();tree_sha=r.json()['sha']
+        if tree_sha!=git('rev-parse','HEAD^{tree}'):raise RuntimeError('Source tree verification failed')
+        r=c.post(repo+'/git/commits',json={'message':'Publish reviewed DawnBreaker source for all platforms','tree':tree_sha,'parents':[parent] if parent else []});r.raise_for_status();sha=r.json()['sha']
+        r=c.patch(repo+'/git/refs/heads/main',json={'sha':sha,'force':False}) if parent else c.post(repo+'/git/refs',json={'ref':'refs/heads/main','sha':sha});r.raise_for_status()
+        r=c.get(repo+'/commits/main');r.raise_for_status()
         if r.json()['sha']!=sha:raise RuntimeError('Remote commit verification failed')
+        statefile.write_text(json.dumps({'id':state.get('id') or c.get(repo).json()['id'],'name':NAME,'commit':sha,'tree':tree_sha}),encoding='utf8')
         print('Published '+str(len(files))+' source files: https://github.com/'+owner+'/'+NAME,flush=True)
         print('Verified commit: '+sha,flush=True)
 if __name__=='__main__':main()
