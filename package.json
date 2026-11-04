@@ -41,6 +41,6 @@
     "typescript": "^5.9.0",
     "vite": "^7.2.0"
   },
-  "dawnReleaseSequence": 9,
+  "dawnReleaseSequence": 10,
   "license": "AGPL-3.0-or-later"
 }

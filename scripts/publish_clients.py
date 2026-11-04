@@ -1,5 +1,5 @@
 """Sign release manifests locally; upload binaries without private keys."""
-import base64,hashlib,json
+import base64,hashlib,json,argparse
 from release_common import VERSION_CODE,SUMMARY
 from pathlib import Path
 from datetime import datetime,timezone
@@ -11,6 +11,8 @@ root=Path(__file__).resolve().parents[1]
 version=json.loads((root/'package.json').read_text(encoding='utf-8'))['version']
 key=serialization.load_pem_private_key((root/'.local/update-signing-private.pem').read_bytes(),password=None)
 platforms={'windows':root/'release/desktop'/f'DawnBreaker-{version}-Windows.exe','android':root/'release/android'/f'DawnBreaker-{version}-Android.apk'}
+parser=argparse.ArgumentParser();parser.add_argument('--platform',choices=['all','windows','android'],default='all');args=parser.parse_args()
+if args.platform!='all':platforms={args.platform:platforms[args.platform]}
 envelopes={}
 for platform,file in platforms.items():
     if not file.is_file():raise RuntimeError('Build is missing: '+str(file))
