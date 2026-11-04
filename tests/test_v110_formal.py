@@ -14,7 +14,7 @@ def test_document_changes_milestones_and_noop_revision(client):
     assert task(client,'图书管理员')['progress']==0
     path='/api/plugins/library/nodes/'+doc['id'];body={'title':doc['title'],'markdown':'新'*501,'revision':1}
     assert client.put(path,json=body).status_code==200
-    assert task(client,'图书管理员')['progress']==1 and task(client,'笔耕不辍')['progress']==500
+    assert task(client,'图书管理员')['progress']==1 and task(client,'笔耕不辍')['progress']==0
     assert client.put(path,json=body).status_code==409
     before=task(client,'笔耕不辍')['progress']
     assert client.put(path,json=body|{'revision':2}).status_code==200

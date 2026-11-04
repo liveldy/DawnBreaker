@@ -6,16 +6,27 @@ from remote import connection
 from deploy import command
 from release_common import VERSION
 root=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('--code-only',action='store_true');args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('--code-only',action='store_true');parser.add_argument('--collection-pack',help='Upload only one newly imported collection pack, retaining existing media');args=parser.parse_args()
+if args.code_only and args.collection_pack:parser.error('Choose code-only or a collection pack')
+selected_ids=None;selected_poster=None
+if args.collection_pack:
+    import json
+    selected_ids={c['id'] for c in json.loads((root/'server/content/cards.json').read_text('utf8'))['cards'] if c.get('album_id')==args.collection_pack}
+    spec=next((a for a in json.loads((root/'server/content/card-albums.json').read_text('utf8'))['albums'] if a['id']==args.collection_pack),None)
+    if not selected_ids or not spec:raise ValueError('Unknown or empty collection pack')
+    selected_poster=spec.get('poster')
 release='/opt/dawnbreaker/releases/'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')+'-v'+VERSION
 archive=root/'artifacts'/('resources-'+VERSION+'.tar.gz')
 with tarfile.open(archive,'w:gz',compresslevel=1) if not args.code_only else __import__('contextlib').nullcontext() as tar:
     if args.code_only:print('Reuse previously deployed media resources',flush=True)
-    for folder in ['posters','splashes','rarity','voice']:
+    for folder in ['cards','posters','splashes','rarity','voice']:
         if args.code_only:continue
         for file in (root/'server/content'/folder).rglob('*'):
             if file.is_symlink():raise ValueError('Unexpected resource symlink')
-            if file.is_file():tar.add(file,arcname=file.relative_to(root/'server/content').as_posix())
+            if file.is_file():
+                relative=file.relative_to(root/'server/content').as_posix()
+                if selected_ids is not None and not (folder in ('cards','splashes') and file.stem in selected_ids or relative==selected_poster):continue
+                tar.add(file,arcname=relative)
 with connection() as ssh:
     backup='/var/backups/dawnbreaker/'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')+'-before-'+VERSION+'.db'
     code="import sqlite3,os;os.makedirs('/var/backups/dawnbreaker',mode=0o700,exist_ok=True);a=sqlite3.connect('/var/lib/dawnbreaker/dawn.db');b=sqlite3.connect("+repr(backup)+");a.backup(b);b.close();a.close();os.chmod("+repr(backup)+",0o600)"

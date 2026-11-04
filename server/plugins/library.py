@@ -50,6 +50,18 @@ class Update(BaseModel):
     markdown:str=Field(max_length=1000000)
     parent_id:str|None=None
 
+class ForegroundTime(BaseModel):
+    session:str=Field(min_length=8,max_length=80,pattern='^[A-Za-z0-9_-]+$')
+    document_id:str=Field(min_length=1,max_length=80)
+    seconds:float=Field(ge=0,le=100000000,allow_inf_nan=False)
+
+@router.post('/foreground-time')
+def foreground_time(body:ForegroundTime,u=Depends(user)):
+    from ..library_time import record
+    with connect(True) as d:
+        if node(d,u['id'],body.document_id)['kind']!='document':raise HTTPException(422,'只统计文档页面停留时间')
+        return record(d,u['id'],body.session,body.document_id,body.seconds)
+
 @router.get('')
 def listing(u=Depends(user)):
     with connect() as d:

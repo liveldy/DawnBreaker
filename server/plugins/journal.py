@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..core import require_plugin, installed, credit, state, set_state, today
 from ..db import connect
 from ..milestones import listening_seconds
+from ..library_time import minutes as library_minutes
 MANIFEST={'id':'journal','name':'拾光记','description':'记录签到、练习、听曲、珍藏、创作与交流，领取每日任务和递进成就奖励。','category':'基础支持','icon':'Flag','ui':'journal'}
 router=APIRouter(prefix='/api/plugins/journal',tags=['拾光记']);user=require_plugin('journal')
 REWARDS=[{'essence':50},{'essence':2000},{'essence':10000},{'stones':5},{'stones':10},{'stones':20},{'stones':50}]
@@ -33,13 +34,14 @@ def tasks(db,uid):
     if all(installed(db,uid,p) for p in ['checkin','vocabulary','music','collection']):add('v2-daily-all:'+today(),'有始有终','完成其他所有每日任务',sum(t['progress']>=t['target'] for t in daily),len(daily),{'essence':10},'每日任务')
     memory=state(db,uid,'vocabulary','memory',{})
     groups=[('checkin','千里之行',events('checkin'),[3,7,15,30,60,120,240],'累计完成 {} 天签到'),('vocabulary','记忆大师',sum(bool(v.get('memorized')) for v in memory.values()),[20,100,250,500,1000,2000,5000],'累计已记忆 {} 词'),('music','旋律爱好者',int(listening_seconds(db,uid)//60),[20,100,250,500,1000,2000,5000],'累计听曲 {} 分钟'),('collection','绝无仅有',completed_albums(db,uid) if installed(db,uid,'collection') else 0,[1,2,5,10,20,50,100],'累计集齐 {} 个系列卡册')]
-    changed=db.execute("SELECT COALESCE(SUM(json_extract(payload,'$.characters')),0) FROM events WHERE user_id=? AND kind='document-saved'",(uid,)).fetchone()[0]
-    groups += [('library','笔耕不辍',changed,[500,2000,10000,20000,50000,200000,500000],'累计文本改动 {} 字'),('constellation','心灵的交流',events('assistant-chatted'),[10,20,50,100,200,500,1000],'累计和助手对话 {} 次')]
+    groups += [('library','笔耕不辍',library_minutes(db,uid),[20,50,100,200,500,1000,2000],'累计在流萤集文档页面停留 {} 分钟'),('constellation','心灵的交流',events('assistant-chatted'),[10,20,50,100,200,500,1000],'累计和助手对话 {} 次')]
     for plugin,title,n,levels,desc in groups:
         if not installed(db,uid,plugin):continue
-        milestones=[dict(target=target,reward=REWARDS[i],claimed=state(db,uid,'journal',f'claim:v2-ach-{plugin}-{i}',False)) for i,target in enumerate(levels)]
+        # User-requested reset: text-edit claims and totals do not carry over.
+        prefix='v3-ach-library-reading' if plugin=='library' else 'v2-ach-'+plugin
+        milestones=[dict(target=target,reward=REWARDS[i],claimed=state(db,uid,'journal',f'claim:{prefix}-{i}',False)) for i,target in enumerate(levels)]
         index=next((i for i,m in enumerate(milestones) if not m['claimed']),6)
-        add(f'v2-ach-{plugin}-{index}',title,desc.format(levels[index]),n,levels[index],REWARDS[index],'成就',level=index+1,milestones=milestones)
+        add(f'{prefix}-{index}',title,desc.format(levels[index]),n,levels[index],REWARDS[index],'成就',level=index+1,milestones=milestones,unit='分钟' if plugin in ('library','music') else '次' if plugin=='constellation' else '天' if plugin=='checkin' else '词' if plugin=='vocabulary' else '册')
     return result
 @router.get('')
 def get(u=Depends(user)):

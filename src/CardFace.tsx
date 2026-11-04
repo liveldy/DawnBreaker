@@ -1,6 +1,6 @@
 import type {CSSProperties} from 'react';
 import './collection-cards.css';
-export type CardData={id:string;name:string;image:string;rarity:string;rarity_badge?:string;splash?:string;description?:string;original_rarity?:string;refund?:number;legacy?:boolean;title?:string;owned?:number;new?:boolean;album_id?:string;series_ids?:string[]};
+export type CardData={id:string;name:string;image:string;rarity:string;rarity_badge?:string;splash?:string;description?:string;original_rarity?:string;refund?:number;legacy?:boolean;title?:string;owned?:number;new?:boolean;album_id?:string;series_ids?:string[];character_name?:string;skin_name?:string;artist?:string;source_url?:string};
 export type AlbumNode={id:string;name:string;kind:'album'|'universe'|'series';cover:string;poster?:string;total:number;owned:number;children:AlbumNode[];card_ids:string[];description?:string};
 type Props={image:string;name:string;subtitle?:string;grade:string;rarityIcon?:string;rarity?:string;badge?:string;dimmed?:boolean;onClick?:()=>void;delay?:number};
 /** Shared physical card face for cards, universe/series books, history and reveals. */

@@ -4,4 +4,7 @@ paramiko==5.1.0
 xlrd==2.0.2
 pillow==13.0.0
 mutagen==1.47.0
+beautifulsoup4==4.15.0
+mwparserfromhell==0.7.2
+playwright==1.64.1
 

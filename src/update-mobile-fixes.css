@@ -7,3 +7,8 @@
 @media(max-width:640px){.draw-ten .card-subtitle{font-size:11px;line-height:1.25}.draw-ten .rarity-art{height:18px!important}.card-detail-copy h3{font-size:18px}.milestones li{font-size:12px}}
 
 .quote-credit{display:flex;align-items:center;justify-content:space-between;gap:15px}.quote-credit .quote-voice{flex:none;min-width:44px;min-height:44px}.card-lettering .rarity-art{margin-top:0;margin-bottom:3px}
+
+.card-story{white-space:pre-line;overflow-wrap:anywhere}
+.card-art-scrim{background:linear-gradient(180deg,transparent 38%,rgba(0,0,0,.76) 70%,#0b0b0b 100%)}
+.wish-scrim{background:linear-gradient(90deg,rgba(0,0,0,.77),rgba(0,0,0,.2) 45%,rgba(0,0,0,.02) 70%)}
+@media(max-width:640px){.wish-scrim{background:linear-gradient(90deg,rgba(0,0,0,.68),rgba(0,0,0,.04) 68%)}}

@@ -1,9 +1,11 @@
 import {useState,useRef,useEffect} from 'react';
+import{useLibraryTime}from'./useLibraryTime';
 import {Folder,FileText,Plus,Upload,ChevronRight,ArrowLeft,Save,Download,Trash2,Search,BookOpen,RefreshCw,ImagePlus,Images}from'lucide-react';
 import{api,post}from'./api';import{useApp}from'./context';import{useData,Sheet,upload,saveText}from'./workspace';import MarkdownView from'./MarkdownView';
 export type LibraryNode={id:string;parent_id:string|null;kind:'folder'|'document';title:string;revision:number;markdown?:string;updated_at:string;source_job_id?:string};
 export default function LibraryPage(){
  const{notify,boot,offline}=useApp();const r=useData<{nodes:LibraryNode[];imports:any[];storage:any}>('/plugins/library');const[parent,setParent]=useState<string|null>(null),[doc,setDoc]=useState<LibraryNode|null>(null),[text,setText]=useState(''),[title,setTitle]=useState(''),[saved,setSaved]=useState(''),[busy,setBusy]=useState(false),[modal,setModal]=useState<'create'|'import'|'images'|null>(null),[kind,setKind]=useState<'folder'|'document'>('document'),[newTitle,setNewTitle]=useState(''),[view,setView]=useState(()=>matchMedia('(max-width: 600px)').matches?'preview':'split'),[query,setQuery]=useState(''),[confirmDelete,setConfirmDelete]=useState<LibraryNode|null>(null);const file=useRef<HTMLInputElement>(null),imageFile=useRef<HTMLInputElement>(null),editor=useRef<HTMLTextAreaElement>(null);const images=useData(modal==='images'?'/plugins/library/images':null);const[mode,setMode]=useState('auto');const[removeJob,setRemoveJob]=useState<any>(null);const dirty=!!doc&&(text!==doc.markdown||title!==doc.title);
+ useLibraryTime(doc?.id,boot.user.id,offline);
  const nodes=r.data?.nodes||[];const jobs=r.data?.imports||[];const working=jobs.some(j=>['queued','running'].includes(j.status));
  useEffect(()=>{if(!working)return;const timer=setInterval(r.reload,4000);return()=>clearInterval(timer);},[working]);
  useEffect(()=>{const guard=(e:Event)=>{if(dirty&&!window.confirm('当前修改尚未保存，仍然离开？'))e.preventDefault();};window.addEventListener('dawn:before-navigate',guard);return()=>window.removeEventListener('dawn:before-navigate',guard);},[dirty]);
