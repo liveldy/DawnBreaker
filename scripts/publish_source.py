@@ -3,9 +3,9 @@ import base64,getpass,json,os,re,subprocess,sys
 from pathlib import Path
 import httpx
 ROOT=Path(__file__).resolve().parents[1]
-NAME='dawnbreaker-app'
+NAME='DawnBreaker'
 def git(*args,env=None):
-    r=subprocess.run(['git',*args],cwd=ROOT,env=env,capture_output=True)
+    r=subprocess.run(['git',*args],cwd=ROOT,env=env,capture_output=True,timeout=90)
     if r.returncode:raise RuntimeError('Git operation failed: '+args[0]+'; '+r.stderr.decode('utf8','replace')[:300])
     return r.stdout.decode('utf8','replace').strip()
 def main():
@@ -44,7 +44,7 @@ def main():
         elif git('remote','get-url','origin')!=url:raise RuntimeError('Existing origin differs; no remote overwritten')
         auth=base64.b64encode(('x-access-token:'+token).encode()).decode()
         env=os.environ.copy();env.update(GIT_CONFIG_COUNT='1',GIT_CONFIG_KEY_0='http.https://github.com/.extraheader',GIT_CONFIG_VALUE_0='AUTHORIZATION: basic '+auth,GIT_TERMINAL_PROMPT='0')
-        git('push','-u','origin','main',env=env)
+        git('-c','http.version=HTTP/1.1','push','-u','origin','main',env=env)
         sha=git('rev-parse','HEAD');r=c.get(repo+'/commits/main');r.raise_for_status()
         if r.json()['sha']!=sha:raise RuntimeError('Remote commit verification failed')
         print('Published '+str(len(files))+' source files: https://github.com/'+owner+'/'+NAME,flush=True)
