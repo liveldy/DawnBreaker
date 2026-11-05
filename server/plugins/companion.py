@@ -10,7 +10,8 @@ from ..core import require_plugin
 from ..secret_store import seal,open_secret
 from ..outbound import endpoint,request_json
 from ..ai_endpoints import api_base,models_url
-from ..companion_state import PRESETS,owned,emotion,mood_label,memory_strength,prune
+from ..companion_config import settings,profile
+from ..companion_state import owned,emotion,mood_label,memory_strength,prune
 
 MANIFEST={'id':'companion','name':'拾光者','description':'与 Grok、DeepSeek 自然聊天。短句聊天、情绪变化、渐进记忆与偶尔主动的问候。','category':'聊天','icon':'MessagesSquare','ui':'companion'}
 router=APIRouter(prefix='/api/plugins/companion',tags=['拾光者']);user=require_plugin('companion')
@@ -34,8 +35,8 @@ class Config(BaseModel):
 
 def public(d,row):
     cfg=json.loads(row['config']);value=emotion(row['provider'],row['emotion']);stamp=time.time()
-    unread=d.execute("SELECT COUNT(*) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant' AND id>? AND visible_at<=?",(row['user_id'],row['id'],row['seen_id'],stamp)).fetchone()[0]
-    last=d.execute('SELECT text,role,created_at,media FROM companion_messages WHERE user_id=? AND companion_id=? AND visible_at<=? ORDER BY id DESC LIMIT 1',(row['user_id'],row['id'],stamp)).fetchone()
+    unread=d.execute("SELECT COUNT(*) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant' AND hidden_at IS NULL AND id>? AND visible_at<=?",(row['user_id'],row['id'],row['seen_id'],stamp)).fetchone()[0]
+    last=d.execute('SELECT text,role,created_at,media FROM companion_messages WHERE user_id=? AND companion_id=? AND hidden_at IS NULL AND visible_at<=? ORDER BY id DESC LIMIT 1',(row['user_id'],row['id'],stamp)).fetchone()
     active=d.execute("SELECT id,status,kind,error,result FROM companion_turns WHERE user_id=? AND companion_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",(row['user_id'],row['id'])).fetchone()
     last=dict(last) if last else None
     if last:
@@ -43,17 +44,17 @@ def public(d,row):
         if kind and (kind[0]=='audio' or not last['text']):last['text']={'audio':'[语音]','image':'[图片]','video':'[视频]'}.get(kind[0],'[附件]')
     active=dict(active) if active else None
     if active:active['stage']=json.loads(active.pop('result') or '{}').get('stage','')
-    return {'id':row['id'],'provider':row['provider'],'config':cfg,'has_key':bool(row['secret']),'name':cfg.get('display_name') or PRESETS[row['provider']]['name'],'avatar':'/api/plugins/companion/'+row['id']+'/avatar?v='+cfg.get('avatar_id','default1'),'mood':mood_label(value,row['provider']),'unread':unread,'last_message':last,'active_turn':active,'created_at':row['created_at'],'revision':row['revision']}
+    return {'id':row['id'],'provider':row['provider'],'config':cfg,'has_key':bool(row['secret']),'name':cfg.get('display_name') or profile(row['provider'])['name'],'avatar':'/api/plugins/companion/'+row['id']+'/avatar?v='+cfg.get('avatar_id','default1'),'mood':mood_label(value,row['provider']),'unread':unread,'last_message':last,'active_turn':active,'created_at':row['created_at'],'revision':row['revision']}
 
 @router.get('')
 def listing(u=Depends(user)):
     with db.connect() as d:
         rows=d.execute('SELECT * FROM companions WHERE user_id=? ORDER BY created_at',(u['id'],)).fetchall()
-        return {'companions':[public(d,dict(r)) for r in rows],'presets':[{'provider':k,'name':v['name'],'label':v['label'],'tagline':v['tagline'],'api_base':v['base'],'protocol':v['protocol'],'avatar':'/api/plugins/companion/avatar/'+k,'chat_avatar':'/api/plugins/companion/avatar/'+k+'?chat=true'} for k,v in PRESETS.items()],'proactive_rules':{'idle_hours':6,'quiet_start':0,'quiet_end':8,'daily_limit':2,'timezone':'Asia/Shanghai'}}
+        return {'companions':[public(d,dict(r)) for r in rows],'presets':[{'provider':k,'name':v['name'],'label':v['label'],'tagline':v['tagline'],'api_base':v['base'],'protocol':v['protocol'],'defaults':v['defaults'],'rules':{k:n for k,n in settings()['proactive'].items() if k in ('idle_hours','quiet_start','quiet_end','daily_limit','timezone')},'video_info':{k:v['tools'][k] for k in ('video_frames','video_seconds')},'avatar':'/api/plugins/companion/avatar/'+k,'chat_avatar':'/api/plugins/companion/avatar/'+k+'?chat=true'} for k,v in settings()['providers'].items()],'proactive_rules':{k:v for k,v in settings()['proactive'].items() if k in ('idle_hours','quiet_start','quiet_end','daily_limit','timezone')}}
 
 @router.get('/avatar/{provider}')
 def avatar(provider:str,chat:bool=False,u=Depends(user)):
-    if provider not in PRESETS:raise HTTPException(404,'形象不存在')
+    if provider not in ('grok','deepseek'):raise HTTPException(404,'形象不存在')
     path=Path(__file__).parents[1]/('content/aiheader' if chat else 'content/ai')/(f'{provider}.jpg' if chat else f'{provider}.webp')
     if not path.is_file():raise HTTPException(404,'此部署未安装可选角色形象资源')
     return FileResponse(path,media_type='image/jpeg' if chat else 'image/webp')
@@ -152,24 +153,70 @@ def default_avatar(id:str,u=Depends(user)):
         d.execute('UPDATE companions SET config=?,revision=revision+1,updated_at=? WHERE id=? AND user_id=?',(json.dumps(cfg,ensure_ascii=False),db.now(),id,u['id']));_remove_old_avatar(d,u['id'],old)
         return public(d,owned(d,u['id'],id))
 
+def message_public(d,r,uid,id):
+    attachments=[]
+    for token in json.loads(r['media']):
+        try:attachments.append(media.public(media.owned(d,uid,token,id)))
+        except HTTPException:pass
+    return {'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else r['text'],'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id'],'request_id':r['request_id'],'turn_status':r['turn_status'],'turn_error':r['turn_error']}
+
+MESSAGE_SELECT="SELECT m.*,t.request_id,t.status AS turn_status,t.error AS turn_error FROM companion_messages m LEFT JOIN companion_turns t ON t.id=m.turn_id AND t.user_id=m.user_id"
+VISIBLE="m.user_id=? AND m.companion_id=? AND m.hidden_at IS NULL AND m.visible_at<=?"
+
 @router.get('/{id}/messages')
-def messages(id:str,before:int=Query(0,ge=0),u=Depends(user)):
+def messages(id:str,before:int=Query(0,ge=0),around:int=Query(0,ge=0),message_revision:int=Query(-1,ge=-1),requests:str=Query('',max_length=11000),u=Depends(user)):
     with db.connect() as d:
-        row=owned(d,u['id'],id);stamp=time.time();rows=d.execute('SELECT * FROM companion_messages WHERE user_id=? AND companion_id=? AND visible_at<=? AND (?=0 OR id<?) ORDER BY id DESC LIMIT 60',(u['id'],id,stamp,before,before)).fetchall();result=[]
-        for r in reversed(rows):
-            attachments=[]
-            for token in json.loads(r['media']):
-                try:attachments.append(media.public(media.owned(d,u['id'],token,id)))
-                except HTTPException:pass
-            result.append({'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else r['text'],'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id']})
-        upcoming=d.execute("SELECT MAX(visible_at) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant'",(u['id'],id)).fetchone()[0] or 0
+        row=owned(d,u['id'],id);stamp=time.time();args=(u['id'],id,stamp)
+        if around:
+            if not d.execute('SELECT 1 FROM companion_messages m WHERE '+VISIBLE+' AND m.id=?',args+(around,)).fetchone():raise HTTPException(404,'这条消息已移除或不存在')
+            prior=d.execute(MESSAGE_SELECT+' WHERE '+VISIBLE+' AND m.id<=? ORDER BY m.id DESC LIMIT 30',args+(around,)).fetchall()
+            later=d.execute(MESSAGE_SELECT+' WHERE '+VISIBLE+' AND m.id>? ORDER BY m.id LIMIT 30',args+(around,)).fetchall();rows=list(reversed(prior))+list(later)
+        else:rows=list(reversed(d.execute(MESSAGE_SELECT+' WHERE '+VISIBLE+' AND (?=0 OR m.id<?) ORDER BY m.id DESC LIMIT 60',args+(before,before)).fetchall()))
+        has_older=bool(rows and d.execute('SELECT 1 FROM companion_messages m WHERE '+VISIBLE+' AND m.id<? LIMIT 1',args+(rows[0]['id'],)).fetchone())
+        deleted=None
+        if message_revision!=row['message_revision']:deleted=[r[0] for r in d.execute('SELECT id FROM companion_messages WHERE user_id=? AND companion_id=? AND hidden_at IS NOT NULL',(u['id'],id))]
+        acknowledged=[];request_ids=list(dict.fromkeys(v for v in requests.split(',') if 8<=len(v)<=100))[:100]
+        if request_ids:
+            acknowledged=[dict(r) for r in d.execute("SELECT t.request_id,t.id AS turn_id,m.id AS message_id,m.hidden_at IS NOT NULL AS hidden FROM companion_turns t JOIN companion_messages m ON m.turn_id=t.id AND m.user_id=t.user_id AND m.role='user' WHERE t.user_id=? AND t.companion_id=? AND t.request_id IN ("+','.join('?'*len(request_ids))+')',(u['id'],id,*request_ids))]
+        upcoming=d.execute("SELECT MAX(visible_at) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant' AND hidden_at IS NULL",(u['id'],id)).fetchone()[0] or 0
         latest=d.execute('SELECT id,status,kind,error,result FROM companion_turns WHERE user_id=? AND companion_id=? ORDER BY created_at DESC LIMIT 1',(u['id'],id)).fetchone()
-        return {'companion':public(d,row),'messages':result,'has_older':len(rows)==60,'typing':upcoming>stamp,'latest_turn':{**{k:latest[k] for k in ('id','status','kind','error')},'result':json.loads(latest['result']) if latest['result'] else None} if latest else None}
+        return {'companion':public(d,row),'messages':[message_public(d,r,u['id'],id) for r in rows],'has_older':has_older,'typing':upcoming>stamp,'message_revision':row['message_revision'],'deleted_ids':deleted,'acknowledged':acknowledged,'latest_turn':{**{k:latest[k] for k in ('id','status','kind','error')},'result':json.loads(latest['result']) if latest['result'] else None} if latest else None}
+
+@router.get('/{id}/messages/search')
+def search_messages(id:str,q:str=Query(min_length=1,max_length=200),before:int=Query(0,ge=0),u=Depends(user)):
+    if not q.strip():raise HTTPException(422,'请输入搜索内容')
+    with db.connect() as d:
+        owned(d,u['id'],id)
+        rows=d.execute(MESSAGE_SELECT+' WHERE '+VISIBLE+' AND instr(lower(m.text),lower(?))>0 AND (?=0 OR m.id<?) ORDER BY m.id DESC LIMIT 51',(u['id'],id,time.time(),q.strip(),before,before)).fetchall()
+        return {'messages':[message_public(d,r,u['id'],id) for r in rows[:50]],'has_more':len(rows)>50}
+
+def hide_message(d,uid,id,mid):
+    row=d.execute('SELECT id,hidden_at FROM companion_messages WHERE id=? AND user_id=? AND companion_id=?',(mid,uid,id)).fetchone()
+    if not row:raise HTTPException(404,'消息不存在')
+    if row['hidden_at'] is None:
+        d.execute('UPDATE companion_messages SET hidden_at=? WHERE id=? AND user_id=?',(db.now(),mid,uid));d.execute('UPDATE companions SET message_revision=message_revision+1 WHERE id=? AND user_id=?',(id,uid))
+    return owned(d,uid,id)['message_revision']
+
+@router.delete('/{id}/messages/request/{request_id}')
+def hide_pending(id:str,request_id:str,u=Depends(user)):
+    if not 8<=len(request_id)<=100:raise HTTPException(422,'消息标识无效')
+    with db.connect(True) as d:
+        owned(d,u['id'],id)
+        d.execute('INSERT OR IGNORE INTO companion_message_hides VALUES(?,?,?,?)',(u['id'],id,request_id,db.now()))
+        found=d.execute("SELECT m.id FROM companion_messages m JOIN companion_turns t ON t.id=m.turn_id AND t.user_id=m.user_id WHERE m.user_id=? AND m.companion_id=? AND t.request_id=? AND m.role='user'",(u['id'],id,request_id)).fetchone()
+        if found:hide_message(d,u['id'],id,found[0])
+    return {'message':'已从聊天记录中移除'}
+
+@router.delete('/{id}/messages/{mid}')
+def remove_message(id:str,mid:int,u=Depends(user)):
+    with db.connect(True) as d:
+        owned(d,u['id'],id);revision=hide_message(d,u['id'],id,mid)
+    return {'message':'已从聊天记录中移除，记忆与其他数据保留','message_revision':revision}
 
 @router.post('/{id}/read')
 def read(id:str,u=Depends(user)):
     with db.connect(True) as d:
-        owned(d,u['id'],id);latest=d.execute("SELECT MAX(id) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant' AND visible_at<=?",(u['id'],id,time.time())).fetchone()[0] or 0
+        owned(d,u['id'],id);latest=d.execute("SELECT MAX(id) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant' AND hidden_at IS NULL AND visible_at<=?",(u['id'],id,time.time())).fetchone()[0] or 0
         d.execute('UPDATE companions SET seen_id=MAX(seen_id,?) WHERE id=? AND user_id=?',(latest,id,u['id']))
     return {'ok':True}
 
@@ -215,7 +262,7 @@ def remove_pending_attachment(token:str,u=Depends(user)):
     with db.connect(True) as d:
         row=media.owned(d,u['id'],token)
         if d.execute("SELECT 1 FROM companions WHERE user_id=? AND json_extract(config,'$.avatar_id')=?",(u['id'],token)).fetchone():raise HTTPException(409,'此图片正在作为角色头像使用，可在角色设置中恢复默认头像')
-        if d.execute('SELECT 1 FROM companion_messages m,json_each(m.media) a WHERE m.user_id=? AND a.value=?',(u['id'],token)).fetchone():raise HTTPException(409,'附件已进入聊天，可在角色设置中清理历史附件')
+        if d.execute('SELECT 1 FROM companion_messages m,json_each(m.media) a WHERE m.user_id=? AND a.value=?',(u['id'],token)).fetchone():raise HTTPException(409,'附件已进入聊天，移除聊天记录会保留附件')
         d.execute('DELETE FROM companion_media WHERE id=? AND user_id=?',(token,u['id']))
     (media.ROOT/row['filename']).unlink(missing_ok=True)
     return {'ok':True}
@@ -224,7 +271,8 @@ def remove_pending_attachment(token:str,u=Depends(user)):
 def memories(id:str,u=Depends(user)):
     with db.connect(True) as d:
         owned(d,u['id'],id);prune(d,u['id'],id);rows=d.execute('SELECT * FROM companion_memories WHERE user_id=? AND companion_id=? ORDER BY kind,created DESC',(u['id'],id)).fetchall()
-        return {'memories':[{k:r[k] for k in ('id','text','kind','importance','created','last_access','accesses')}|{'strength':round(memory_strength(r),3)} for r in rows]}
+        tuning=profile(owned(d,u['id'],id)['provider'])['memory']
+        return {'memories':[{k:r[k] for k in ('id','text','kind','importance','created','last_access','accesses')}|{'strength':round(memory_strength(r,cfg=tuning),3)} for r in rows]}
 
 class Memory(BaseModel):
     text:str=Field(min_length=1,max_length=800)
@@ -247,15 +295,9 @@ def forget(id:str,memory_id:str,u=Depends(user)):
 @router.delete('/{id}/history')
 def clear_history(id:str,u=Depends(user)):
     with db.connect(True) as d:
-        companion=owned(d,u['id'],id)
-        if d.execute("SELECT 1 FROM companion_turns WHERE user_id=? AND companion_id=? AND status IN ('queued','running')",(u['id'],id)).fetchone():raise HTTPException(409,'请等待当前消息完成后再清理')
-        avatar_id=json.loads(companion['config']).get('avatar_id','')
-        files=[r[0] for r in d.execute('SELECT filename FROM companion_media WHERE user_id=? AND companion_id=? AND id!=?',(u['id'],id,avatar_id))]
-        for table in ('companion_actions','companion_messages','companion_turns'):d.execute('DELETE FROM '+table+' WHERE user_id=? AND companion_id=?',(u['id'],id))
-        d.execute('DELETE FROM companion_media WHERE user_id=? AND companion_id=? AND id!=?',(u['id'],id,avatar_id))
-        d.execute('UPDATE companions SET last_user_at=NULL,last_assistant_at=NULL,next_chance=0,seen_id=0 WHERE id=? AND user_id=?',(id,u['id']))
-    for filename in files:(media.ROOT/filename).unlink(missing_ok=True)
-    return {'message':'已清空聊天和附件，角色身份与记忆保留'}
+        owned(d,u['id'],id)
+        d.execute('UPDATE companion_messages SET hidden_at=? WHERE user_id=? AND companion_id=? AND hidden_at IS NULL',(db.now(),u['id'],id));d.execute('UPDATE companions SET message_revision=message_revision+1 WHERE id=? AND user_id=?',(id,u['id']))
+    return {'message':'已从聊天记录中移除，记忆、情感和其他数据保持原样'}
 
 @router.get('/{id}/emotion')
 def emotional_state(id:str,u=Depends(user)):

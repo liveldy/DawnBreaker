@@ -11,6 +11,7 @@ from .secret_store import open_secret
 from .outbound import request_json
 from .ai_endpoints import api_base
 from .ai_protocol import invoke
+from .companion_config import profile,settings
 from .companion_transport import wire,transcribe,post_json_bytes
 from .companion_state import owned,emotion,mood_label,reply_probability,proactive_probability,quiet,next_opportunity,recall,remember,episode,conversation_prompt
 
@@ -23,6 +24,7 @@ def submit(uid,id,body,proactive=False):
     kind='proactive' if proactive else body['kind'];stamp=time.time();request_id=body['request_id'];fingerprint=hashlib.sha256(json.dumps(body,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     with db.connect(True) as d:
         row=owned(d,uid,id);cfg=json.loads(row['config'])
+        if kind in ('image','video','voice') and not profile(row['provider'])['tools'][kind+'_enabled']:raise HTTPException(422,'管理员未开启该生成功能')
         if not installed(d,uid,'companion'):raise HTTPException(403,'请先安装拾光者')
         if not row['secret']:raise HTTPException(422,'请先在设置中填写 API 密钥')
         prior=d.execute('SELECT * FROM companion_turns WHERE user_id=? AND request_id=?',(uid,request_id)).fetchone()
@@ -44,6 +46,7 @@ def submit(uid,id,body,proactive=False):
         if not proactive:
             text=body['text'].strip() or ('发段语音给我' if kind=='voice' else '')
             d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,media,created_at,visible_at) VALUES(?,?,?,?,?,?,?,?)',(uid,id,token,'user',text,json.dumps(body.get('media_ids',[])),created,stamp))
+            if d.execute('SELECT 1 FROM companion_message_hides WHERE user_id=? AND companion_id=? AND request_id=?',(uid,id,request_id)).fetchone():d.execute("UPDATE companion_messages SET hidden_at=? WHERE user_id=? AND companion_id=? AND turn_id=? AND role='user'",(created,uid,id,token))
             d.execute('UPDATE companions SET last_user_at=?,next_chance=?,updated_at=? WHERE id=?',(stamp,next_opportunity(stamp,stamp),created,id))
         result={'id':token,'status':'queued','kind':kind,'error':None}
     (MEDIA_POOL if kind in ('image','video','voice') else CHAT_POOL).submit(run,uid,token)
@@ -64,7 +67,7 @@ def retry(uid,token):
 class ReplyFormatError(HTTPException):
     def __init__(self,message='回复格式无法读取，请重试'):super().__init__(502,message)
 
-def parse_reply(raw,allow_empty=False):
+def parse_reply(raw,allow_empty=False,max_bubbles=None):
     text=str(raw).strip();text=re.sub(r'^```(?:json)?\s*|\s*```$','',text)
     try:value=json.JSONDecoder(strict=False).raw_decode(text)[0]
     except ValueError:
@@ -74,12 +77,13 @@ def parse_reply(raw,allow_empty=False):
         if 'bubbles' not in value:value['bubbles']=value.get('text') or value.get('message') or value.get('messages')
         if isinstance(value.get('bubbles'),str):value['bubbles']=[value['bubbles']]
     if not isinstance(value,dict) or not isinstance(value.get('bubbles'),list):raise ReplyFormatError()
-    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:12] if isinstance(s,str) and s.strip()]
+    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:max_bubbles or profile('deepseek')['generation']['max_bubbles']] if isinstance(s,str) and s.strip()]
     if not bubbles and not allow_empty:raise ReplyFormatError('没有收到可读取的回复，请重试')
     return bubbles,value
 
-def update_emotion(old,proposal):
-    for name,limit,low,high in [('valence',.12,-1,1),('energy',.1,0,1),('closeness',.015,0,1)]:
+def update_emotion(old,proposal,provider='deepseek'):
+    cfg=profile(provider)['emotion']
+    for name,limit,low,high in [('valence',cfg['valence_step'],-1,1),('energy',cfg['energy_step'],0,1),('closeness',cfg['closeness_step'],0,1)]:
         try:delta=float(proposal.get(name+'_delta',0))
         except (ValueError,TypeError):delta=0
         if not math.isfinite(delta):delta=0
@@ -87,19 +91,19 @@ def update_emotion(old,proposal):
     old.update(at=time.time(),silent_streak=0);return old
 
 def chat(row,turn,body):
-    uid=row['user_id'];id=row['id'];cfg=json.loads(row['config']);key=open_secret(row['secret']);base=api_base(cfg['api_base']);proactive=turn['kind']=='proactive';attachments=[]
+    uid=row['user_id'];id=row['id'];cfg=json.loads(row['config']);key=open_secret(row['secret']);base=api_base(cfg['api_base']);proactive=turn['kind']=='proactive';attachments=[];preset=profile(row['provider']);generation=preset['generation']
     with db.connect(True) as d:
-        history=d.execute('SELECT * FROM companion_messages WHERE user_id=? AND companion_id=? ORDER BY id DESC LIMIT 30',(uid,id)).fetchall();memory=recall(d,uid,id,body.get('text',''));source=next((r['id'] for r in history if r['turn_id']==turn['id'] and r['role']=='user'),None)
+        history=d.execute('SELECT * FROM companion_messages WHERE user_id=? AND companion_id=? ORDER BY id DESC LIMIT ?',(uid,id,generation['history_messages'])).fetchall();memory=recall(d,uid,id,body.get('text',''));source=next((r['id'] for r in history if r['turn_id']==turn['id'] and r['role']=='user'),None)
         for token in body.get('media_ids',[]):attachments.append(media.owned(d,uid,token,id))
     value=emotion(row['provider'],row['emotion']);draw=secrets.randbelow(1_000_000)/1_000_000
-    if not proactive and any(r['role']=='assistant' for r in history) and draw>reply_probability(body.get('text',''),value,bool(attachments)):
+    if not proactive and any(r['role']=='assistant' for r in history) and draw>reply_probability(body.get('text',''),value,bool(attachments),row['provider']):
         value['silent_streak']=value.get('silent_streak',0)+1;return {'silent':True,'emotion':value,'bubbles':[],'source_id':source,'user_text':body.get('text','')}
-    messages=[];remaining=24000
+    messages=[];remaining=generation['history_chars']
     # Keep the newest turn when trimming a long conversation.
     for r in history:
         if attachments and r['turn_id']==turn['id']:continue
         if remaining<=0:break
-        content=r['text'][:min(12000 if r['turn_id']==turn['id'] else 4000,remaining)];remaining-=len(content)
+        content=r['text'][:min(12000 if r['turn_id']==turn['id'] else generation['old_message_chars'],remaining)];remaining-=len(content)
         if r['turn_id']!=turn['id'] and json.loads(r['media']):content+='\n[此前发送的附件，内容见相邻回复]'
         if content:messages.append({'role':r['role'],'content':content})
     messages.reverse()
@@ -107,29 +111,29 @@ def chat(row,turn,body):
     for attachment in attachments:
         if attachment['kind']=='image':image_inputs.append(media.data_url(attachment))
         elif attachment['kind']=='video':
-            image_inputs.extend(media.frames(attachment));latest+='\n[这段视频的四个采样关键帧，不代表全部画面]'
+            image_inputs.extend(media.frames(attachment,preset['tools']['video_frames']));latest+='\n[这段视频的 '+str(preset['tools']['video_frames'])+' 个采样关键帧，不代表全部画面]'
             if cfg.get('voice_enabled'):
                 info,_=media.metadata(media.ROOT/attachment['filename'])
                 if any(s.get('codec_type')=='audio' for s in info.get('streams',[])):
                     try:latest+='\n[视频音轨转写] '+transcribe(base,key,media.wav(attachment),cfg.get('voice_model',''))
                     except HTTPException as error:
                         if error.status_code!=422 or '没有识别到语音' not in str(error.detail):raise
-                        latest+='\n[音轨中没有可识别语音，按采样画面分析]';notices.append('视频已分析 4 个关键帧；音轨中没有可识别语音')
+                        latest+='\n[音轨中没有可识别语音，按采样画面分析]';notices.append('视频已分析 '+str(preset['tools']['video_frames'])+' 个关键帧；音轨中没有可识别语音')
             else:latest+='\n[未分析音轨]'
         elif attachment['kind']=='audio':latest+='\n[语音转写] '+transcribe(base,key,media.wav(attachment),cfg.get('voice_model',''))
     if attachments:
         # Replace the current user message, never put user images into a system/assistant role.
         messages.append({'role':'user','content':latest or '看看我发来的内容'})
-    if proactive:messages.append({'role':'user','content':'[系统调度的主动联系机会；不代表用户发了这条消息。自然聊一点，不催回复] '})
+    if proactive:messages.append({'role':'user','content':settings()['proactive_input']})
     model=cfg['image_model'] if image_inputs and row['provider']=='deepseek' else cfg['chat_model']
-    config={'family':row['provider'],'protocol':cfg['protocol'],'api_base':base,'model':model,'max_tokens':1800,'show_reasoning':False}
+    config={'family':row['provider'],'protocol':cfg['protocol'],'api_base':base,'model':model,'max_tokens':generation['max_tokens'],'show_reasoning':False}
     if image_inputs:
         protocol=cfg['protocol'];parts=[{'type':'input_text' if protocol=='responses' else 'text','text':messages[-1]['content']}]
         parts.extend([{'type':'input_image','image_url':url} if protocol=='responses' else {'type':'image_url','image_url':{'url':url}} for url in image_inputs])
         messages[-1]['content']=parts
     from .companion_agent import converse
     result=converse(row,turn,messages,conversation_prompt(row,memory,proactive),config,key,lambda config,key,url,body,headers:request_json(url,body,headers),generated)
-    try:bubbles,value_result=parse_reply(result['raw'],bool(result['media_ids']))
+    try:bubbles,value_result=parse_reply(result['raw'],bool(result['media_ids']),generation['max_bubbles'])
     except ReplyFormatError:
         if result['media_ids']:
             bubbles=[];value_result={};notices.append('媒体已发送，本次附言未能读取')
@@ -137,11 +141,11 @@ def chat(row,turn,body):
             # Re-request only the final malformed model step; completed tools stay cached.
             with db.connect(True) as d:d.execute("UPDATE companion_actions SET status='failed' WHERE id=(SELECT id FROM companion_actions WHERE user_id=? AND turn_id=? AND kind='plan' ORDER BY created_at DESC,rowid DESC LIMIT 1)",(uid,turn['id']))
             raise
-    return {'bubbles':bubbles,'emotion':update_emotion(value,value_result.get('emotion') if isinstance(value_result.get('emotion'),dict) else {}),'memories':value_result.get('memories',[]),'source_id':source,'user_text':latest,'notices':notices,'media_ids':result['media_ids'],'sources':result['sources'],'spoken':result['spoken'],'tool_errors':result['tool_errors']}
+    return {'bubbles':bubbles,'emotion':update_emotion(value,value_result.get('emotion') if isinstance(value_result.get('emotion'),dict) else {},row['provider']),'memories':value_result.get('memories',[]),'source_id':source,'user_text':latest,'notices':notices,'media_ids':result['media_ids'],'sources':result['sources'],'spoken':result['spoken'],'tool_errors':result['tool_errors']}
 
 
 def generated(row,turn,body):
-    cfg=json.loads(row['config']);base=api_base(cfg['api_base']);key=open_secret(row['secret']);headers={'Authorization':'Bearer '+key};kind=turn['kind'];prompt=body['text'].strip()[:4000]
+    cfg=json.loads(row['config']);base=api_base(cfg['api_base']);key=open_secret(row['secret']);headers={'Authorization':'Bearer '+key};kind=turn['kind'];tuning=profile(row['provider'])['tools'];prompt=body['text'].strip()[:tuning['prompt_chars']]
     if kind=='voice':
         text=prompt
         if body.get('source_message_id'):
@@ -149,29 +153,33 @@ def generated(row,turn,body):
             if not r:raise HTTPException(404,'要朗读的消息不存在')
             text=r['text']
         if not text:raise HTTPException(422,'请填写语音文字，或选择一条消息朗读')
-        if len(text)>600:raise HTTPException(422,'单条语音最多朗读 600 字，请选择较短的消息')
-        data,mime=post_json_bytes(base+'/tts',key,{'text':text,'voice_id':cfg['voice_id'],'language':'zh','with_timestamps':True})
+        if len(text)>tuning['voice_chars']:raise HTTPException(422,'语音文字超过管理员设定的长度上限')
+        data,mime=post_json_bytes(base+'/tts',key,{'text':text,'voice_id':cfg['voice_id'],'language':tuning['voice_language'],'with_timestamps':True})
         if 'json' in mime:
             try:data=base64.b64decode(json.loads(data)['audio'],validate=True)
             except Exception:raise HTTPException(502,'语音服务未返回有效音频')
         token=media.store(row['user_id'],row['id'],'audio',data)
     elif kind=='image':
-        data=request_json(base+'/images/generations',{'model':cfg['image_model'],'prompt':prompt,'n':1,'response_format':'b64_json'},headers)
+        data=request_json(base+'/images/generations',{'model':cfg['image_model'],'prompt':prompt,'n':tuning['image_count'],'response_format':'b64_json'},headers)
+        tokens=[]
         try:
-            image=data['data'][0];raw=base64.b64decode(image['b64_json'],validate=True) if image.get('b64_json') else wire(image['url'],limit=30*1024*1024)[0]
+            for image in data['data'][:tuning['image_count']]:
+                raw=base64.b64decode(image['b64_json'],validate=True) if image.get('b64_json') else wire(image['url'],limit=30*1024*1024)[0]
+                tokens.append(media.store(row['user_id'],row['id'],'image',raw))
         except (ValueError,KeyError,IndexError,TypeError):raise HTTPException(502,'图像服务未返回可用图片')
-        token=media.store(row['user_id'],row['id'],'image',raw)
+        if not tokens:raise HTTPException(502,'图像服务未返回可用图片')
+        return {'media_ids':tokens,'bubbles':[],'label':''}
     else:
         job=turn.get('provider_job')
         if not job:
-            data=request_json(base+'/videos/generations',{'model':cfg['video_model'],'prompt':prompt,'duration':4,'resolution':'720p'},headers);job=data.get('request_id')
+            data=request_json(base+'/videos/generations',{'model':cfg['video_model'],'prompt':prompt,'duration':tuning['video_seconds'],'resolution':tuning['video_resolution']},headers);job=data.get('request_id')
             if not isinstance(job,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,150}',job):raise HTTPException(502,'视频服务没有返回可用任务 ID')
             with db.connect(True) as d:d.execute('UPDATE '+('companion_actions' if turn.get('action_id') else 'companion_turns')+' SET provider_job=? WHERE id=? AND user_id=?',(job,turn.get('action_id') or turn['id'],row['user_id']))
-        for _ in range(90):
+        for _ in range(tuning['poll_attempts']):
             data=request_json(base+'/videos/'+quote(job,safe=''),headers=headers)
             if data.get('status')=='done':break
             if data.get('status') in ('failed','expired'):raise HTTPException(502,'视频生成失败或任务已过期，请重新发起生成')
-            time.sleep(5)
+            time.sleep(tuning['poll_seconds'])
         else:raise HTTPException(504,'视频仍在生成，可稍后重试继续查询，不会重复创建上游任务')
         try:raw=wire(data['video']['url'],limit=64*1024*1024)[0]
         except (KeyError,TypeError):raise HTTPException(502,'视频服务未返回有效视频')
@@ -195,18 +203,18 @@ def run(uid,token):
                 text=result['user_text'];episode(d,uid,row['id'],text,result['source_id'])
                 proposals=result.get('memories',[])
                 proposals=proposals if isinstance(proposals,list) else []
-                if re.search(r'记住|别忘|不要忘',text):proposals=proposals+[{'text':text[:800],'quote':text[:800],'importance':1}]
+                if any(t in text for t in profile(row['provider'])['memory']['explicit_terms']):proposals=proposals+[{'text':text[:800],'quote':text[:800],'importance':1}]
                 remember(d,uid,row['id'],proposals,result['source_id'],text)
-            delay=0
+            tuning=profile(row['provider'])['generation'];delay=0
             for token_id in result.get('media_ids',[]):
                 spoken=result.get('spoken',{}).get(token_id,'')
                 d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,media,created_at,visible_at) VALUES(?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',spoken,json.dumps([token_id]),db.now(),stamp+delay))
                 if spoken:episode(d,uid,row['id'],spoken,None,'assistant')
-                delay+=.4
+                delay+=tuning['media_delay']
             for i,text in enumerate(result.get('bubbles',[])):
                 message=d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,created_at,visible_at,proactive,sources) VALUES(?,?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',text,db.now(),stamp+delay,int(turn['kind']=='proactive'),json.dumps(result.get('sources',[]) if i==len(result['bubbles'])-1 else [],ensure_ascii=False)))
                 episode(d,uid,row['id'],text,message.lastrowid,'assistant')
-                delay+=.6+secrets.randbelow(800)/1000
+                delay+=tuning['delay_min']+(tuning['delay_max']-tuning['delay_min'])*secrets.randbelow(1000)/1000
             if not result.get('silent'):d.execute('UPDATE companions SET last_assistant_at=?,updated_at=? WHERE id=?',(stamp,db.now(),row['id']))
             summary={'silent':bool(result.get('silent')),'bubble_count':len(result.get('bubbles',[])),'media_ids':result.get('media_ids',[]),'notices':result.get('notices',[]),'tool_errors':result.get('tool_errors',[])}
             d.execute("UPDATE companion_turns SET status='completed',result=?,updated_at=? WHERE id=? AND user_id=?",(json.dumps(summary),db.now(),token,uid))
@@ -217,17 +225,18 @@ def run(uid,token):
 def scheduler_tick(stamp=None,draw=None):
     stamp=time.time() if stamp is None else stamp;draw=draw or (lambda:secrets.randbelow(1_000_000)/1_000_000)
     if quiet(stamp):return
+    proactive=settings()['proactive']
     with db.connect() as d:rows=d.execute("SELECT c.* FROM companions c JOIN installed i ON i.user_id=c.user_id AND i.plugin_id='companion' WHERE c.last_user_at IS NOT NULL AND c.next_chance<=?",(stamp,)).fetchall()
     for raw in rows:
         row=dict(raw);cfg=json.loads(row['config'])
-        if not cfg.get('proactive_enabled') or not row['secret'] or stamp-row['last_user_at']<6*3600:continue
-        day=datetime.fromtimestamp(stamp,ZoneInfo('Asia/Shanghai')).date().isoformat();chance=proactive_probability(emotion(row['provider'],row['emotion'],stamp))
+        if not cfg.get('proactive_enabled') or not row['secret'] or stamp-row['last_user_at']<proactive['idle_hours']*3600:continue
+        day=datetime.fromtimestamp(stamp,ZoneInfo(proactive['timezone'])).date().isoformat();chance=proactive_probability(emotion(row['provider'],row['emotion'],stamp))
         with db.connect(True) as d:
             current=owned(d,row['user_id'],row['id'])
             if current['next_chance']>stamp or current['last_user_at']!=row['last_user_at']:continue
             attempts=d.execute("SELECT COUNT(*) FROM companion_turns WHERE user_id=? AND kind='proactive' AND request_id LIKE ?",(row['user_id'],'proactive:'+day+':%')).fetchone()[0]
-            d.execute('UPDATE companions SET next_chance=? WHERE id=?',(next_opportunity(current['last_user_at'],stamp+2*3600),row['id']))
-            if attempts>=2 or draw()>chance:continue
+            d.execute('UPDATE companions SET next_chance=? WHERE id=?',(next_opportunity(current['last_user_at'],stamp+proactive['chance_interval_hours']*3600),row['id']))
+            if attempts>=proactive['daily_limit'] or draw()>chance:continue
         try:submit(row['user_id'],row['id'],{'request_id':'proactive:'+day+':'+uuid.uuid4().hex,'kind':'chat','text':'','media_ids':[]},True)
         except HTTPException:pass
 

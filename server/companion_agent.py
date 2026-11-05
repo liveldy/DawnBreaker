@@ -3,16 +3,18 @@ import hashlib,json,time,uuid
 from fastapi import HTTPException
 from . import db
 from .ai_protocol import invoke,ModelReply
+from .companion_config import profile,settings
 from .companion_search import search,read_page
 
 def definitions(row):
-    cfg=json.loads(row['config'])
-    def tool(name,description,fields):return {'name':name,'description':description,'parameters':{'type':'object','properties':{key:{'type':'string','description':desc} for key,desc in fields.items()},'required':list(fields),'additionalProperties':False}}
+    cfg=json.loads(row['config']);tuning=profile(row['provider'])['tools'];descriptions=settings()['tool_descriptions']
+    def tool(name,description,fields):return {'name':name,'description':descriptions[name],'parameters':{'type':'object','properties':{key:{'type':'string','description':desc} for key,desc in fields.items()},'required':list(fields),'additionalProperties':False}}
     result=[tool('search_web','搜索公开问题，聚合 Google、Bing，必要时 DuckDuckGo 备用。只返回实际取得的摘要与来源。',{'query':'具体、简洁的公开问题，最多 300 字'}),tool('read_webpage','精读搜索结果或用户提供的 HTTPS 网页，只提取与问题相关的正文，去除导航、广告和评论。',{'url':'完整 HTTPS 网页地址','query':'本轮需要核实的问题或主题'})]
+    result=[t for t in result if tuning['search_enabled' if t['name']=='search_web' else 'read_enabled']]
     if row['provider']=='grok':
-        if cfg.get('image_model'):result.append(tool('generate_image','按对话需要生成一张图片并直接发送，不要求用户打开生成面板。本轮最多一张。',{'prompt':'完整画面描述，最多 4000 字'}))
-        if cfg.get('video_model'):result.append(tool('generate_video','按对话需要生成 4 秒视频并直接发送。本轮最多一个。',{'prompt':'完整视频描述，最多 4000 字'}))
-        if cfg.get('voice_enabled'):result.append(tool('send_voice','选择用语音而非文字表达时调用，直接发送一条语音。不要再重复发送相同文字。本轮最多一条。',{'text':'你自己要说的话，最多 600 字'}))
+        if cfg.get('image_model') and tuning['image_enabled']:result.append(tool('generate_image','',{'prompt':f"完整画面描述，最多 {tuning['prompt_chars']} 字"}))
+        if cfg.get('video_model') and tuning['video_enabled']:result.append(tool('generate_video','',{'prompt':f"完整视频描述，最多 {tuning['prompt_chars']} 字；生成时长 {tuning['video_seconds']} 秒"}))
+        if cfg.get('voice_enabled') and tuning['voice_enabled']:result.append(tool('send_voice','',{'text':f"你自己要说的话，最多 {tuning['voice_chars']} 字"}))
     return result
 
 def stage(uid,turn_id,text):
@@ -43,7 +45,7 @@ def act(row,turn,call,generate):
         elif name=='read_webpage':result=read_page(args.get('url',''),args.get('query',''))
         else:
             kind={'generate_image':'image','generate_video':'video','send_voice':'voice'}[name];text=args.get('text' if kind=='voice' else 'prompt','')
-            if not isinstance(text,str) or not text.strip() or len(text)>(600 if kind=='voice' else 4000):raise HTTPException(422,'工具内容为空或超过长度限制')
+            if not isinstance(text,str) or not text.strip() or len(text)>(profile(row['provider'])['tools']['voice_chars'] if kind=='voice' else profile(row['provider'])['tools']['prompt_chars']):raise HTTPException(422,'工具内容为空或超过长度限制')
             generated=generate(row,{'id':turn_id,'kind':kind,'provider_job':old['provider_job'] if old else None,'action_id':id},{'text':text})
             result={'status':'sent','kind':kind,'media_ids':generated['media_ids'],'spoken_text':text if kind=='voice' else ''}
         completed(uid,row['id'],turn_id,id,'tool',name,args,result);return result
@@ -54,26 +56,26 @@ def act(row,turn,call,generate):
         return {'error':message}
 
 def converse(row,turn,messages,system,config,key,request,generate):
-    uid=row['user_id'];tools=definitions(row);media=[];sources=[];spoken={};actions=0;errors=[]
+    uid=row['user_id'];tuning=profile(row['provider'])['tools'];tools=definitions(row);media=[];sources=[];spoken={};actions=0;errors=[]
     def source(item):
         if not item.get('url'):return
         previous=next((v for v in sources if v['url']==item['url']),None)
         if previous:return previous['id']
         result={'id':len(sources)+1,'title':item.get('title') or item['url'],'url':item['url']};sources.append(result);return result['id']
-    for step in range(6):
+    for step in range(tuning['max_rounds']):
         id=turn['id']+':plan:'+str(step);cached=load(uid,id)
         if cached and cached['status']=='completed':
             v=json.loads(cached['result']);reply=ModelReply(v['text'],calls=v['calls'],wire=v['wire'])
         else:
             stage(uid,turn['id'],'正在回复…')
-            reply=invoke(config,key,messages,system,request,tools=tools if step<5 and actions<12 else None)
+            reply=invoke(config,key,messages,system,request,tools=tools if step<tuning['max_rounds']-1 and actions<tuning['max_calls'] else None)
             completed(uid,row['id'],turn['id'],id,'plan','model',{}, {'text':str(reply),'calls':reply.calls,'wire':reply.wire})
         if not reply.calls:return {'raw':reply,'media_ids':media,'sources':sources[:8],'spoken':spoken,'tool_errors':errors}
-        if step==5:raise HTTPException(502,'本轮工具调用次数已达到上限，请分成下一条消息继续')
+        if step==tuning['max_rounds']-1:raise HTTPException(502,'本轮工具调用次数已达到上限，请分成下一条消息继续')
         messages.append({'role':'assistant','wire':reply.wire})
-        for call in reply.calls[:12]:
+        for call in reply.calls[:tuning['max_calls']]:
             actions+=1
-            result=act(row,turn,call,generate) if actions<=12 else {'error':'本轮工具调用次数已达到上限'}
+            result=act(row,turn,call,generate) if actions<=tuning['max_calls'] else {'error':'本轮工具调用次数已达到上限'}
             for item in result.get('results',[]):item['source_id']=source(item)
             if result.get('relevant'):result['source_id']=source(result)
             for token in result.get('media_ids',[]):

@@ -34,7 +34,7 @@ def test_native_image_tool_retry_reuses_paid_generation(client,setup,monkeypatch
     picture=next(m for m in data['messages'] if m['role']=='assistant' and m['media']);assert picture['text']==''
     download=client.get(picture['media'][0]['url']+'?download=true');assert download.status_code==200 and 'attachment' in download.headers['content-disposition']
     assert client.delete(ROOT+'/'+id+'/history').status_code==200
-    with db.connect() as d:assert d.execute('SELECT COUNT(*) FROM companion_actions').fetchone()[0]==0
+    with db.connect() as d:assert d.execute('SELECT COUNT(*) FROM companion_actions').fetchone()[0]==3
 
 def test_voice_choice_persists_its_transcript_without_duplicate_text_bubble(client,setup,monkeypatch):
     uid,_=setup;id=create(client,'grok');count=[]

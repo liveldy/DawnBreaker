@@ -64,12 +64,12 @@ def data_url(row):
     if not path.is_file():raise HTTPException(410,'附件文件已清理')
     return 'data:'+row['mime']+';base64,'+base64.b64encode(path.read_bytes()).decode()
 
-def frames(row):
+def frames(row,count=4):
     tool=shutil.which('ffmpeg')
     if not tool:raise HTTPException(503,'服务器尚未安装视频处理工具')
     output=[];path=ROOT/row['filename']
-    for i in range(4):
-        at=min(max(0,row['duration']-.05),row['duration']*i/4)
+    for i in range(count):
+        at=min(max(0,row['duration']-.05),row['duration']*i/count)
         try:
             r=subprocess.run([tool,'-v','error','-ss',str(at),'-i',str(path),'-frames:v','1','-vf','scale=1024:1024:force_original_aspect_ratio=decrease','-f','image2pipe','-vcodec','mjpeg','pipe:1'],capture_output=True,timeout=15,check=True)
             if not r.stdout or len(r.stdout)>2*1024*1024:raise ValueError()
