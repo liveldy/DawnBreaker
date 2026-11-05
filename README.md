@@ -60,7 +60,7 @@ Windows 构建见 [桌面端说明](clients/desktop/README.md)。Android 需 Jav
 - 弦音余韵：歌词、顺序 / 随机 / 单曲循环、后台播放、通知栏 / 托盘及控件。
 - 流萤集：Markdown + LaTeX 文档、书籍管理与 OCR 导入。
 - 星丛：自定义 AI 助手、提示词、文档工作空间、长期记忆与可归档对话。
-- 拾光者：Grok / DeepSeek 固定 AI 伴侣，短气泡聊天、多模态附件、情绪与渐进记忆；主动联系须选择开启，每账号每天最多两次。详见 [设计与 API 适配](docs/companion-design.md)。
+- 拾光者：Grok / DeepSeek 固定 聊天角色，短气泡聊天、多模态附件、情绪与渐进记忆；主动联系须选择开启，每账号每天最多两次。详见 [设计与 API 适配](docs/companion-design.md)。
 - 暗格：以用户主密码加密的密码、卡包、个人信息册，自定义字段与分类导出。
 - 系统管理：Windows / Android 本机资源信息、客户端内存整理与系统管理入口。
 - 天眼：实时模型排行榜、能力成本图、斩杀判定和私有 API 监视。

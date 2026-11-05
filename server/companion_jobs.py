@@ -61,15 +61,21 @@ def retry(uid,token):
     (MEDIA_POOL if kind in ('image','video','voice') else CHAT_POOL).submit(run,uid,token)
     return {'id':token,'status':'queued','kind':kind,'error':None}
 
-def parse_reply(raw):
+class ReplyFormatError(HTTPException):
+    def __init__(self,message='回复格式无法读取，请重试'):super().__init__(502,message)
+
+def parse_reply(raw,allow_empty=False):
     text=str(raw).strip();text=re.sub(r'^```(?:json)?\s*|\s*```$','',text)
-    try:value=json.loads(text)
+    try:value=json.JSONDecoder(strict=False).raw_decode(text)[0]
     except ValueError:
-        if text.startswith(('{','[')):raise HTTPException(502,'伴侣回复格式无法读取，请重试')
+        if text.startswith(('{','[')):raise ReplyFormatError()
         value={'bubbles':[s.strip() for s in re.split(r'\n{2,}',text) if s.strip()]}
-    if not isinstance(value,dict) or not isinstance(value.get('bubbles'),list):raise HTTPException(502,'伴侣回复格式无法读取，请重试')
-    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:6] if isinstance(s,str) and s.strip()]
-    if not bubbles:raise HTTPException(502,'没有收到可读取的回复，请重试')
+    if isinstance(value,dict):
+        if 'bubbles' not in value:value['bubbles']=value.get('text') or value.get('message') or value.get('messages')
+        if isinstance(value.get('bubbles'),str):value['bubbles']=[value['bubbles']]
+    if not isinstance(value,dict) or not isinstance(value.get('bubbles'),list):raise ReplyFormatError()
+    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:12] if isinstance(s,str) and s.strip()]
+    if not bubbles and not allow_empty:raise ReplyFormatError('没有收到可读取的回复，请重试')
     return bubbles,value
 
 def update_emotion(old,proposal):
@@ -121,8 +127,18 @@ def chat(row,turn,body):
         protocol=cfg['protocol'];parts=[{'type':'input_text' if protocol=='responses' else 'text','text':messages[-1]['content']}]
         parts.extend([{'type':'input_image','image_url':url} if protocol=='responses' else {'type':'image_url','image_url':{'url':url}} for url in image_inputs])
         messages[-1]['content']=parts
-    raw=invoke(config,key,messages,conversation_prompt(row,memory,proactive),lambda config,key,url,body,headers:request_json(url,body,headers));bubbles,result=parse_reply(raw)
-    return {'bubbles':bubbles,'emotion':update_emotion(value,result.get('emotion') if isinstance(result.get('emotion'),dict) else {}),'memories':result.get('memories',[]),'source_id':source,'user_text':latest,'notices':notices}
+    from .companion_agent import converse
+    result=converse(row,turn,messages,conversation_prompt(row,memory,proactive),config,key,lambda config,key,url,body,headers:request_json(url,body,headers),generated)
+    try:bubbles,value_result=parse_reply(result['raw'],bool(result['media_ids']))
+    except ReplyFormatError:
+        if result['media_ids']:
+            bubbles=[];value_result={};notices.append('媒体已发送，本次附言未能读取')
+        else:
+            # Re-request only the final malformed model step; completed tools stay cached.
+            with db.connect(True) as d:d.execute("UPDATE companion_actions SET status='failed' WHERE id=(SELECT id FROM companion_actions WHERE user_id=? AND turn_id=? AND kind='plan' ORDER BY created_at DESC,rowid DESC LIMIT 1)",(uid,turn['id']))
+            raise
+    return {'bubbles':bubbles,'emotion':update_emotion(value,value_result.get('emotion') if isinstance(value_result.get('emotion'),dict) else {}),'memories':value_result.get('memories',[]),'source_id':source,'user_text':latest,'notices':notices,'media_ids':result['media_ids'],'sources':result['sources'],'spoken':result['spoken'],'tool_errors':result['tool_errors']}
+
 
 def generated(row,turn,body):
     cfg=json.loads(row['config']);base=api_base(cfg['api_base']);key=open_secret(row['secret']);headers={'Authorization':'Bearer '+key};kind=turn['kind'];prompt=body['text'].strip()[:4000]
@@ -150,7 +166,7 @@ def generated(row,turn,body):
         if not job:
             data=request_json(base+'/videos/generations',{'model':cfg['video_model'],'prompt':prompt,'duration':4,'resolution':'720p'},headers);job=data.get('request_id')
             if not isinstance(job,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,150}',job):raise HTTPException(502,'视频服务没有返回可用任务 ID')
-            with db.connect(True) as d:d.execute('UPDATE companion_turns SET provider_job=? WHERE id=? AND user_id=?',(job,turn['id'],row['user_id']))
+            with db.connect(True) as d:d.execute('UPDATE '+('companion_actions' if turn.get('action_id') else 'companion_turns')+' SET provider_job=? WHERE id=? AND user_id=?',(job,turn.get('action_id') or turn['id'],row['user_id']))
         for _ in range(90):
             data=request_json(base+'/videos/'+quote(job,safe=''),headers=headers)
             if data.get('status')=='done':break
@@ -160,7 +176,7 @@ def generated(row,turn,body):
         try:raw=wire(data['video']['url'],limit=64*1024*1024)[0]
         except (KeyError,TypeError):raise HTTPException(502,'视频服务未返回有效视频')
         token=media.store(row['user_id'],row['id'],'video',raw)
-    return {'media_ids':[token],'bubbles':[],'label':'AI 生成的'+{'image':'图像','video':'视频','voice':'语音'}[kind]}
+    return {'media_ids':[token],'bubbles':[],'label':''}
 
 def run(uid,token):
     try:
@@ -182,13 +198,17 @@ def run(uid,token):
                 if re.search(r'记住|别忘|不要忘',text):proposals=proposals+[{'text':text[:800],'quote':text[:800],'importance':1}]
                 remember(d,uid,row['id'],proposals,result['source_id'],text)
             delay=0
-            for text in result.get('bubbles',[]):
-                message=d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,created_at,visible_at,proactive) VALUES(?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',text,db.now(),stamp+delay,int(turn['kind']=='proactive')))
+            for token_id in result.get('media_ids',[]):
+                spoken=result.get('spoken',{}).get(token_id,'')
+                d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,media,created_at,visible_at) VALUES(?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',spoken,json.dumps([token_id]),db.now(),stamp+delay))
+                if spoken:episode(d,uid,row['id'],spoken,None,'assistant')
+                delay+=.4
+            for i,text in enumerate(result.get('bubbles',[])):
+                message=d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,created_at,visible_at,proactive,sources) VALUES(?,?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',text,db.now(),stamp+delay,int(turn['kind']=='proactive'),json.dumps(result.get('sources',[]) if i==len(result['bubbles'])-1 else [],ensure_ascii=False)))
                 episode(d,uid,row['id'],text,message.lastrowid,'assistant')
                 delay+=.6+secrets.randbelow(800)/1000
-            if result.get('media_ids'):d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,media,created_at,visible_at) VALUES(?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',result.get('label',''),json.dumps(result['media_ids']),db.now(),stamp))
             if not result.get('silent'):d.execute('UPDATE companions SET last_assistant_at=?,updated_at=? WHERE id=?',(stamp,db.now(),row['id']))
-            summary={'silent':bool(result.get('silent')),'bubble_count':len(result.get('bubbles',[])),'media_ids':result.get('media_ids',[]),'notices':result.get('notices',[])}
+            summary={'silent':bool(result.get('silent')),'bubble_count':len(result.get('bubbles',[])),'media_ids':result.get('media_ids',[]),'notices':result.get('notices',[]),'tool_errors':result.get('tool_errors',[])}
             d.execute("UPDATE companion_turns SET status='completed',result=?,updated_at=? WHERE id=? AND user_id=?",(json.dumps(summary),db.now(),token,uid))
     except Exception as error:
         message=str(error.detail) if isinstance(error,HTTPException) else '这条消息处理失败，请重试；已有聊天和记忆保留'
@@ -223,6 +243,7 @@ def recover():
     with db.connect(True) as d:
         pending=d.execute("SELECT user_id,id,kind,provider_job FROM companion_turns WHERE status IN ('queued','running')").fetchall()
         for r in pending:
-            if r['kind']=='video' and r['provider_job']:
-                d.execute("UPDATE companion_turns SET status='queued' WHERE id=?",(r['id'],));MEDIA_POOL.submit(run,r['user_id'],r['id'])
+            has_video=d.execute("SELECT 1 FROM companion_actions WHERE user_id=? AND turn_id=? AND name='generate_video' AND provider_job IS NOT NULL AND status!='completed'",(r['user_id'],r['id'])).fetchone()
+            if r['kind']=='video' and r['provider_job'] or has_video:
+                d.execute("UPDATE companion_turns SET status='queued' WHERE id=?",(r['id'],));(MEDIA_POOL if r['kind']=='video' else CHAT_POOL).submit(run,r['user_id'],r['id'])
             else:d.execute("UPDATE companion_turns SET status='failed',error='服务重启中断了消息，可手动重试',updated_at=? WHERE id=?",(db.now(),r['id']))

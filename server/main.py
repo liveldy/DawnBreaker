@@ -41,7 +41,7 @@ async def lifespan(app):
     try:yield
     finally:companion_stop.set()
 
-app=FastAPI(title='破晓 DawnBreaker',version='1.4.0',lifespan=lifespan)
+app=FastAPI(title='破晓 DawnBreaker',version='1.4.1',lifespan=lifespan)
 
 @app.middleware('http')
 async def protection(request:Request,call_next):
@@ -123,7 +123,7 @@ def logout(request:Request,response:Response):
 @app.get('/api/bootstrap')
 def bootstrap(u=Depends(require_user)):
     with db.connect() as conn:
-        return {'user':public_user(u),'wallet':{k:balance(conn,u['id'],k) for k in ['essence','stones']},'plugins':[p for p in catalog(conn,u['id']) if p['installed']],'version':'1.4.0'}
+        return {'user':public_user(u),'wallet':{k:balance(conn,u['id'],k) for k in ['essence','stones']},'plugins':[p for p in catalog(conn,u['id']) if p['installed']],'version':'1.4.1'}
 
 class Profile(BaseModel):
     nickname:str=Field(min_length=1,max_length=30)
@@ -188,7 +188,7 @@ def wallet(page:int=Query(1,ge=1),u=Depends(require_user)):
 @app.get('/api/health')
 def health():
     with db.connect() as conn: conn.execute('SELECT 1').fetchone()
-    return {'status':'ok','service':'DawnBreaker','version':'1.4.0'}
+    return {'status':'ok','service':'DawnBreaker','version':'1.4.1'}
 
 for module in MODULES: app.include_router(module.router)
 from .admin import router as admin_router

@@ -74,7 +74,7 @@ def test_chat_idempotency_bubbles_personality_and_permanent_fact(client,setup,mo
     run(uid,turn);data=client.get(ROOT+'/'+id+'/messages').json()
     assert [m['text'] for m in data['messages']][1:]==['才没有在等你','芒果过敏这件事记下了 💙']
     assert data['latest_turn']['status']=='completed'
-    system=calls[0]['messages'][0]['content'];assert '蓝色鲸鱼娘' in system and '本性稳定' in system and calls[0]['thinking']=={'type':'disabled'}
+    system=calls[0]['messages'][0]['content'];assert '蓝色鲸鱼娘' in system and '核心性格稳定' in system and calls[0]['thinking']=={'type':'disabled'}
     memories=client.get(ROOT+'/'+id+'/memories').json()['memories'];assert any(m['kind']=='permanent' and m['text']=='用户对芒果过敏' for m in memories)
     assert not any(m['text']=='不存在的用户信息' for m in memories)
     assert any(m['text'].startswith('用户原话') for m in memories)

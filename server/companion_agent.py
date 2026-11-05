@@ -1,0 +1,84 @@
+"""Native tool calls with durable plans and results: retries do not regenerate paid media."""
+import hashlib,json,time,uuid
+from fastapi import HTTPException
+from . import db
+from .ai_protocol import invoke,ModelReply
+from .companion_search import search,read_page
+
+def definitions(row):
+    cfg=json.loads(row['config'])
+    def tool(name,description,fields):return {'name':name,'description':description,'parameters':{'type':'object','properties':{key:{'type':'string','description':desc} for key,desc in fields.items()},'required':list(fields),'additionalProperties':False}}
+    result=[tool('search_web','搜索公开问题，聚合 Google、Bing，必要时 DuckDuckGo 备用。只返回实际取得的摘要与来源。',{'query':'具体、简洁的公开问题，最多 300 字'}),tool('read_webpage','精读搜索结果或用户提供的 HTTPS 网页，只提取与问题相关的正文，去除导航、广告和评论。',{'url':'完整 HTTPS 网页地址','query':'本轮需要核实的问题或主题'})]
+    if row['provider']=='grok':
+        if cfg.get('image_model'):result.append(tool('generate_image','按对话需要生成一张图片并直接发送，不要求用户打开生成面板。本轮最多一张。',{'prompt':'完整画面描述，最多 4000 字'}))
+        if cfg.get('video_model'):result.append(tool('generate_video','按对话需要生成 4 秒视频并直接发送。本轮最多一个。',{'prompt':'完整视频描述，最多 4000 字'}))
+        if cfg.get('voice_enabled'):result.append(tool('send_voice','选择用语音而非文字表达时调用，直接发送一条语音。不要再重复发送相同文字。本轮最多一条。',{'text':'你自己要说的话，最多 600 字'}))
+    return result
+
+def stage(uid,turn_id,text):
+    with db.connect(True) as d:d.execute("UPDATE companion_turns SET result=?,updated_at=? WHERE id=? AND user_id=?",(json.dumps({'stage':text},ensure_ascii=False),db.now(),turn_id,uid))
+
+def load(uid,id):
+    with db.connect() as d:r=d.execute('SELECT * FROM companion_actions WHERE id=? AND user_id=?',(id,uid)).fetchone()
+    return dict(r) if r else None
+
+def completed(uid,companion_id,turn_id,id,kind,name,args,result):
+    with db.connect(True) as d:d.execute("INSERT INTO companion_actions(id,user_id,companion_id,turn_id,kind,name,input,result,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET result=excluded.result,status='completed',updated_at=excluded.updated_at",(id,uid,companion_id,turn_id,kind,name,json.dumps(args,ensure_ascii=False),json.dumps(result,ensure_ascii=False),'completed',db.now(),db.now()))
+
+def act(row,turn,call,generate):
+    uid=row['user_id'];turn_id=turn['id'];name=call['name'];args=call['arguments'];id=hashlib.sha256((turn_id+':'+call['id']).encode()).hexdigest();old=load(uid,id)
+    if old and old['status']=='completed':return json.loads(old['result'])
+    if old and old['status']=='failed' and not old['provider_job']:return {'error':old['error']}
+    if name not in {v['name'] for v in definitions(row)}:return {'error':'当前没有配置这个功能'}
+    with db.connect(True) as d:
+        # A model repeating a paid call cannot silently charge for a second copy.
+        prior=d.execute("SELECT id,result,status,error FROM companion_actions WHERE turn_id=? AND user_id=? AND kind='tool' AND name=? ORDER BY created_at LIMIT 1",(turn_id,uid,name)).fetchone()
+        if name in ('generate_image','generate_video','send_voice') and prior and prior['id']!=id:
+            return json.loads(prior['result']) if prior['status']=='completed' else {'error':prior['error'] or '本轮已有同类生成任务，不重复创建'}
+        d.execute("INSERT OR IGNORE INTO companion_actions(id,user_id,companion_id,turn_id,kind,name,input,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(id,uid,row['id'],turn_id,'tool',name,json.dumps(args,ensure_ascii=False),'running',db.now(),db.now()))
+    labels={'search_web':'正在搜索多个来源…','read_webpage':'正在阅读相关网页…','generate_image':'正在画图…','generate_video':'正在生成视频…','send_voice':'正在发语音…'}
+    stage(uid,turn_id,labels[name])
+    try:
+        if name=='search_web':result=search(args.get('query',''))
+        elif name=='read_webpage':result=read_page(args.get('url',''),args.get('query',''))
+        else:
+            kind={'generate_image':'image','generate_video':'video','send_voice':'voice'}[name];text=args.get('text' if kind=='voice' else 'prompt','')
+            if not isinstance(text,str) or not text.strip() or len(text)>(600 if kind=='voice' else 4000):raise HTTPException(422,'工具内容为空或超过长度限制')
+            generated=generate(row,{'id':turn_id,'kind':kind,'provider_job':old['provider_job'] if old else None,'action_id':id},{'text':text})
+            result={'status':'sent','kind':kind,'media_ids':generated['media_ids'],'spoken_text':text if kind=='voice' else ''}
+        completed(uid,row['id'],turn_id,id,'tool',name,args,result);return result
+    except Exception as error:
+        message=str(error.detail) if isinstance(error,HTTPException) else '工具暂时无法完成，请稍后再试'
+        with db.connect(True) as d:d.execute("UPDATE companion_actions SET status='failed',error=?,updated_at=? WHERE id=? AND user_id=?",(message[:600],db.now(),id,uid))
+        if name=='generate_video' and isinstance(error,HTTPException) and error.status_code==504:raise
+        return {'error':message}
+
+def converse(row,turn,messages,system,config,key,request,generate):
+    uid=row['user_id'];tools=definitions(row);media=[];sources=[];spoken={};actions=0;errors=[]
+    def source(item):
+        if not item.get('url'):return
+        previous=next((v for v in sources if v['url']==item['url']),None)
+        if previous:return previous['id']
+        result={'id':len(sources)+1,'title':item.get('title') or item['url'],'url':item['url']};sources.append(result);return result['id']
+    for step in range(6):
+        id=turn['id']+':plan:'+str(step);cached=load(uid,id)
+        if cached and cached['status']=='completed':
+            v=json.loads(cached['result']);reply=ModelReply(v['text'],calls=v['calls'],wire=v['wire'])
+        else:
+            stage(uid,turn['id'],'正在回复…')
+            reply=invoke(config,key,messages,system,request,tools=tools if step<5 and actions<12 else None)
+            completed(uid,row['id'],turn['id'],id,'plan','model',{}, {'text':str(reply),'calls':reply.calls,'wire':reply.wire})
+        if not reply.calls:return {'raw':reply,'media_ids':media,'sources':sources[:8],'spoken':spoken,'tool_errors':errors}
+        if step==5:raise HTTPException(502,'本轮工具调用次数已达到上限，请分成下一条消息继续')
+        messages.append({'role':'assistant','wire':reply.wire})
+        for call in reply.calls[:12]:
+            actions+=1
+            result=act(row,turn,call,generate) if actions<=12 else {'error':'本轮工具调用次数已达到上限'}
+            for item in result.get('results',[]):item['source_id']=source(item)
+            if result.get('relevant'):result['source_id']=source(result)
+            for token in result.get('media_ids',[]):
+                if token not in media:media.append(token)
+                if result.get('spoken_text'):spoken[token]=result['spoken_text']
+            if result.get('error'):errors.append(result['error'])
+            messages.append({'role':'tool','tool_call_id':call['id'],'name':call['name'],'content':json.dumps(result,ensure_ascii=False)})
+    raise HTTPException(502,'没有收到最终回复，请重试')

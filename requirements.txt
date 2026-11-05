@@ -9,3 +9,4 @@ python-multipart>=0.0.22
 Pillow>=11.3
 cryptography>=46.0
 
+trafilatura==2.3.1

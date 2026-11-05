@@ -1,7 +1,7 @@
 {
   "name": "dawnbreaker",
   "private": true,
-  "version": "1.4.0",
+  "version": "1.4.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -41,6 +41,6 @@
     "typescript": "^5.9.0",
     "vite": "^7.2.0"
   },
-  "dawnReleaseSequence": 20,
+  "dawnReleaseSequence": 21,
   "license": "AGPL-3.0-or-later"
 }

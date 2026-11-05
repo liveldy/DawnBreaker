@@ -184,7 +184,7 @@ def delete_user(uid:str,u=Depends(require_admin)):
         if db.execute("SELECT 1 FROM ai_turns WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone() or db.execute("SELECT 1 FROM import_jobs WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone():raise HTTPException(409,'请等待该账号的回答或文档识别完成后再删除')
         if db.execute("SELECT 1 FROM companion_turns WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone():raise HTTPException(409,'请等待该账号的拾光者任务完成后再删除')
         companion_files=[r[0] for r in db.execute('SELECT filename FROM companion_media WHERE user_id=?',(uid,))]
-        for table in ['companion_messages','companion_turns','companion_memories','companion_media','companions','quote_history','checkin_notes','library_images','wallpapers','practice_sessions','api_monitors','ai_turns','ai_threads','ai_prompts','assistants','vaults','import_jobs','library_nodes','listening_segments','sessions','installed','balances','ledger','progress','events','downloads']: db.execute('DELETE FROM '+table+' WHERE user_id=?',(uid,))
+        for table in ['companion_actions','companion_messages','companion_turns','companion_memories','companion_media','companions','quote_history','checkin_notes','library_images','wallpapers','practice_sessions','api_monitors','ai_turns','ai_threads','ai_prompts','assistants','vaults','import_jobs','library_nodes','listening_segments','sessions','installed','balances','ledger','progress','events','downloads']: db.execute('DELETE FROM '+table+' WHERE user_id=?',(uid,))
         db.execute('DELETE FROM users WHERE id=?',(uid,))
         audit(db,u,'删除账号及全部业务数据',uid,public_user(old))
     from .companion_media import ROOT as companion_media_root

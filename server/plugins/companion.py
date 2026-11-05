@@ -12,7 +12,7 @@ from ..outbound import endpoint,request_json
 from ..ai_endpoints import api_base,models_url
 from ..companion_state import PRESETS,owned,emotion,mood_label,memory_strength,prune
 
-MANIFEST={'id':'companion','name':'拾光者','description':'两位性格不同的 AI 伴侣。短句聊天、情绪变化、渐进记忆与偶尔主动的问候。','category':'AI 伴侣','icon':'MessagesSquare','ui':'companion'}
+MANIFEST={'id':'companion','name':'拾光者','description':'与 Grok、DeepSeek 自然聊天。短句聊天、情绪变化、渐进记忆与偶尔主动的问候。','category':'聊天','icon':'MessagesSquare','ui':'companion'}
 router=APIRouter(prefix='/api/plugins/companion',tags=['拾光者']);user=require_plugin('companion')
 MODEL=r'^[A-Za-z0-9][A-Za-z0-9_.:/-]*$'
 
@@ -35,9 +35,15 @@ class Config(BaseModel):
 def public(d,row):
     cfg=json.loads(row['config']);value=emotion(row['provider'],row['emotion']);stamp=time.time()
     unread=d.execute("SELECT COUNT(*) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant' AND id>? AND visible_at<=?",(row['user_id'],row['id'],row['seen_id'],stamp)).fetchone()[0]
-    last=d.execute('SELECT text,role,created_at FROM companion_messages WHERE user_id=? AND companion_id=? AND visible_at<=? ORDER BY id DESC LIMIT 1',(row['user_id'],row['id'],stamp)).fetchone()
-    active=d.execute("SELECT id,status,kind,error FROM companion_turns WHERE user_id=? AND companion_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",(row['user_id'],row['id'])).fetchone()
-    return {'id':row['id'],'provider':row['provider'],'config':cfg,'has_key':bool(row['secret']),'name':cfg.get('display_name') or PRESETS[row['provider']]['name'],'avatar':'/api/plugins/companion/'+row['id']+'/avatar?v='+cfg.get('avatar_id','default1'),'mood':mood_label(value,row['provider']),'unread':unread,'last_message':dict(last) if last else None,'active_turn':dict(active) if active else None,'created_at':row['created_at'],'revision':row['revision']}
+    last=d.execute('SELECT text,role,created_at,media FROM companion_messages WHERE user_id=? AND companion_id=? AND visible_at<=? ORDER BY id DESC LIMIT 1',(row['user_id'],row['id'],stamp)).fetchone()
+    active=d.execute("SELECT id,status,kind,error,result FROM companion_turns WHERE user_id=? AND companion_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",(row['user_id'],row['id'])).fetchone()
+    last=dict(last) if last else None
+    if last:
+        tokens=json.loads(last.pop('media'));kind=d.execute('SELECT kind FROM companion_media WHERE id=? AND user_id=?',(tokens[0],row['user_id'])).fetchone() if tokens else None
+        if kind and (kind[0]=='audio' or not last['text']):last['text']={'audio':'[语音]','image':'[图片]','video':'[视频]'}.get(kind[0],'[附件]')
+    active=dict(active) if active else None
+    if active:active['stage']=json.loads(active.pop('result') or '{}').get('stage','')
+    return {'id':row['id'],'provider':row['provider'],'config':cfg,'has_key':bool(row['secret']),'name':cfg.get('display_name') or PRESETS[row['provider']]['name'],'avatar':'/api/plugins/companion/'+row['id']+'/avatar?v='+cfg.get('avatar_id','default1'),'mood':mood_label(value,row['provider']),'unread':unread,'last_message':last,'active_turn':active,'created_at':row['created_at'],'revision':row['revision']}
 
 @router.get('')
 def listing(u=Depends(user)):
@@ -63,7 +69,7 @@ def create(body:Config,u=Depends(user)):
     cfg=validate(body)
     if not body.api_key.strip():raise HTTPException(422,'首次创建请填写 API 密钥')
     with db.connect(True) as d:
-        if d.execute('SELECT 1 FROM companions WHERE user_id=? AND provider=?',(u['id'],body.provider)).fetchone():raise HTTPException(409,'这位伴侣已经创建，可进入设置修改接口；每个厂商只能拥有一位')
+        if d.execute('SELECT 1 FROM companions WHERE user_id=? AND provider=?',(u['id'],body.provider)).fetchone():raise HTTPException(409,'这位角色已经创建，可进入设置修改接口；每个厂商只能拥有一位')
         id=uuid.uuid4().hex;stamp=db.now();d.execute('INSERT INTO companions(id,user_id,provider,config,secret,emotion,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',(id,u['id'],body.provider,json.dumps(cfg,ensure_ascii=False),seal(body.api_key.strip()),json.dumps(emotion(body.provider)),stamp,stamp))
         return public(d,owned(d,u['id'],id))
 
@@ -72,7 +78,7 @@ def update(id:str,body:Config,u=Depends(user)):
     cfg=validate(body)
     with db.connect(True) as d:
         old=owned(d,u['id'],id)
-        if old['provider']!=body.provider:raise HTTPException(409,'伴侣身份固定，不能更换厂商')
+        if old['provider']!=body.provider:raise HTTPException(409,'角色身份固定，不能更换厂商')
         if d.execute("SELECT 1 FROM companion_turns WHERE companion_id=? AND user_id=? AND status IN ('queued','running')",(id,u['id'])).fetchone():raise HTTPException(409,'请等待当前消息处理完成后再修改设置')
         previous=json.loads(old['config'])
         if previous.get('avatar_id'):cfg['avatar_id']=previous['avatar_id']
@@ -155,7 +161,7 @@ def messages(id:str,before:int=Query(0,ge=0),u=Depends(user)):
             for token in json.loads(r['media']):
                 try:attachments.append(media.public(media.owned(d,u['id'],token,id)))
                 except HTTPException:pass
-            result.append({'id':r['id'],'role':r['role'],'text':r['text'],'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id']})
+            result.append({'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else r['text'],'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id']})
         upcoming=d.execute("SELECT MAX(visible_at) FROM companion_messages WHERE user_id=? AND companion_id=? AND role='assistant'",(u['id'],id)).fetchone()[0] or 0
         latest=d.execute('SELECT id,status,kind,error,result FROM companion_turns WHERE user_id=? AND companion_id=? ORDER BY created_at DESC LIMIT 1',(u['id'],id)).fetchone()
         return {'companion':public(d,row),'messages':result,'has_older':len(rows)==60,'typing':upcoming>stamp,'latest_turn':{**{k:latest[k] for k in ('id','status','kind','error')},'result':json.loads(latest['result']) if latest['result'] else None} if latest else None}
@@ -198,18 +204,18 @@ async def upload(id:str,file:UploadFile=File(...),kind:Literal['image','audio','
     with db.connect() as d:return media.public(media.owned(d,u['id'],token,id))
 
 @router.get('/media/{token}')
-def attachment(token:str,u=Depends(user)):
+def attachment(token:str,download:bool=False,u=Depends(user)):
     with db.connect() as d:row=media.owned(d,u['id'],token)
     path=media.ROOT/row['filename']
     if not path.is_file():raise HTTPException(410,'附件已清理')
-    return FileResponse(path,media_type=row['mime'],headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'})
+    return FileResponse(path,media_type=row['mime'],filename=('image-' if row['kind']=='image' else 'media-')+row['filename'] if download else None,headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'})
 
 @router.delete('/media/{token}')
 def remove_pending_attachment(token:str,u=Depends(user)):
     with db.connect(True) as d:
         row=media.owned(d,u['id'],token)
-        if d.execute("SELECT 1 FROM companions WHERE user_id=? AND json_extract(config,'$.avatar_id')=?",(u['id'],token)).fetchone():raise HTTPException(409,'此图片正在作为伴侣头像使用，可在伴侣设置中恢复默认头像')
-        if d.execute('SELECT 1 FROM companion_messages m,json_each(m.media) a WHERE m.user_id=? AND a.value=?',(u['id'],token)).fetchone():raise HTTPException(409,'附件已进入聊天，可在伴侣设置中清理历史附件')
+        if d.execute("SELECT 1 FROM companions WHERE user_id=? AND json_extract(config,'$.avatar_id')=?",(u['id'],token)).fetchone():raise HTTPException(409,'此图片正在作为角色头像使用，可在角色设置中恢复默认头像')
+        if d.execute('SELECT 1 FROM companion_messages m,json_each(m.media) a WHERE m.user_id=? AND a.value=?',(u['id'],token)).fetchone():raise HTTPException(409,'附件已进入聊天，可在角色设置中清理历史附件')
         d.execute('DELETE FROM companion_media WHERE id=? AND user_id=?',(token,u['id']))
     (media.ROOT/row['filename']).unlink(missing_ok=True)
     return {'ok':True}
@@ -245,8 +251,14 @@ def clear_history(id:str,u=Depends(user)):
         if d.execute("SELECT 1 FROM companion_turns WHERE user_id=? AND companion_id=? AND status IN ('queued','running')",(u['id'],id)).fetchone():raise HTTPException(409,'请等待当前消息完成后再清理')
         avatar_id=json.loads(companion['config']).get('avatar_id','')
         files=[r[0] for r in d.execute('SELECT filename FROM companion_media WHERE user_id=? AND companion_id=? AND id!=?',(u['id'],id,avatar_id))]
-        for table in ('companion_messages','companion_turns'):d.execute('DELETE FROM '+table+' WHERE user_id=? AND companion_id=?',(u['id'],id))
+        for table in ('companion_actions','companion_messages','companion_turns'):d.execute('DELETE FROM '+table+' WHERE user_id=? AND companion_id=?',(u['id'],id))
         d.execute('DELETE FROM companion_media WHERE user_id=? AND companion_id=? AND id!=?',(u['id'],id,avatar_id))
         d.execute('UPDATE companions SET last_user_at=NULL,last_assistant_at=NULL,next_chance=0,seen_id=0 WHERE id=? AND user_id=?',(id,u['id']))
     for filename in files:(media.ROOT/filename).unlink(missing_ok=True)
-    return {'message':'已清空聊天和附件，伴侣身份与记忆保留'}
+    return {'message':'已清空聊天和附件，角色身份与记忆保留'}
+
+@router.get('/{id}/emotion')
+def emotional_state(id:str,u=Depends(user)):
+    with db.connect() as d:row=owned(d,u['id'],id)
+    value=emotion(row['provider'],row['emotion'])
+    return {'mood':mood_label(value,row['provider']),'valence':round(value['valence'],3),'energy':round(value['energy'],3),'closeness':round(value['closeness'],3),'last_interaction':row['last_user_at']}
