@@ -14,5 +14,5 @@ jobs:
       - run: node tests/atlas_labels.mjs
       - run: node tests/vault_entries.mjs
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest tests/test_xai.py tests/test_admin_egress.py -q
+      - run: python -m pytest tests/test_xai.py tests/test_admin_egress.py tests/test_companion.py -q
       - run: python scripts/source_smoke.py

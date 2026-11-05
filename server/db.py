@@ -89,6 +89,8 @@ def init():
         CREATE TABLE IF NOT EXISTS quote_history(user_id TEXT NOT NULL REFERENCES users(id),day TEXT NOT NULL,quote_id TEXT NOT NULL,snapshot TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,day));
         ''')
         # Retired currencies are removed, with no conversion or archive.
+        from .companion_state import schema as companion_schema
+        companion_schema(db)
         db.execute("DELETE FROM balances WHERE kind IN ('climb','collection')")
         db.execute("DELETE FROM ledger WHERE kind IN ('climb','collection')")
         db.execute('DROP TABLE IF EXISTS retired_balances')

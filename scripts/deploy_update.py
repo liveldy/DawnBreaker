@@ -48,7 +48,7 @@ with connection() as ssh:
         put(root/'server/calendar-data',release+'/server/calendar-data')
         for file in ['cards.json','card-albums.json','lol-quotes.json','music.json']:put(root/'server/content'/file,release+'/server/content/'+file)
         put(root/'server/content/posters',release+'/server/content/posters')
-        for folder in ['ai','model-atlas']:put(root/'server/content'/folder,release+'/server/content/'+folder)
+        for folder in ['ai','aiheader','model-atlas']:put(root/'server/content'/folder,release+'/server/content/'+folder)
         put(root/'server/content/audio/022.mp3',release+'/server/content/audio/022.mp3')
         put(root/'requirements.txt',release+'/requirements.txt')
         put(root/'deploy/nginx.conf',release+'/deploy/nginx.conf')

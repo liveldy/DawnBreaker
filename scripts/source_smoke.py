@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='dawn-source-') as folder:
         catalog=c.get('/api/catalog').json()['plugins']
         for p in catalog:
             if p['type']=='standard':assert c.post('/api/catalog/'+p['id']+'/install').status_code==200
-        for name in ['collection','music','quotes','journal','vocabulary','library','warp','wallpaper']:
+        for name in ['collection','music','quotes','journal','vocabulary','library','warp','wallpaper','companion']:
             r=c.get('/api/plugins/'+name);assert r.status_code==200,(name,r.text)
         assert c.get('/api/plugins/vocabulary/question').status_code==200
     print('PASS: source-only startup, registration, plugin installation and empty media states')

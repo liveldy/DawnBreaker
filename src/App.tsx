@@ -1,3 +1,5 @@
+import CompanionPage from './CompanionPage';
+import {MessagesSquare} from 'lucide-react';
 import SystemPage from './SystemPage';
 import{Cpu}from'lucide-react';
 import{pluginAvailable}from'./device';
@@ -30,7 +32,7 @@ import './workspace.css';
 import OfflinePanel from './OfflinePanel';
 import {subscribeOffline,offlineSnapshot,nativeOffline,probeConnection,cacheInfo}from './offline';
 
-const ICONS:Record<string,typeof Home>={CalendarDays,Quote,Flag,Feather,Layers,Music2,BookOpen,Download,Bot,LockKeyhole,Radar,Cpu};
+const ICONS:Record<string,typeof Home>={CalendarDays,Quote,Flag,Feather,Layers,Music2,BookOpen,Download,Bot,LockKeyhole,Radar,Cpu,MessagesSquare};
 function Icon({name,size=18}:{name:string;size?:number}){const Component=ICONS[name]||Puzzle;return <Component size={size} strokeWidth={1.6}/>;}
 function Brand(){return <a href="#/" className="brand" aria-label="破晓首页"><img src="/logo.png" alt=""/><span>破晓<small>DawnBreaker</small></span></a>;}
 function Empty({title,children,action}:{title:string;children?:ReactNode;action?:ReactNode}){return <div className="empty"><h3>{title}</h3>{children&&<p>{children}</p>}{action}</div>;}
@@ -135,6 +137,7 @@ function Profile(){
 }
 
 function PluginPage({plugin}:{plugin:Plugin}){
+ if(plugin.id==='companion')return <CompanionPage/>;
  if(plugin.id==='collection')return <CollectionPage/>;
  const pages:Record<string,()=>ReactNode>={checkin:CheckinPage,quotes:QuotePage,journal:JournalPage,vocabulary:VocabularyPage,collection:CollectionPage,music:MusicPage,downloader:DownloaderPage,library:LibraryPage,constellation:ConstellationPage,vault:VaultPage,atlas:AtlasPage,warp:WarpPage,wallpaper:WallpaperPage,system:SystemPage};const Page=pages[plugin.ui||plugin.id];
  return <><PageTitle title={plugin.name} description={plugin.description} action={<a className="text-button" href="#/manage">管理插件<ArrowUpRight size={15}/></a>}/>{Page?<Page key={plugin.id}/>:<Empty title="这个插件暂时没有界面"/>}</>;

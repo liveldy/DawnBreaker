@@ -182,9 +182,13 @@ def delete_user(uid:str,u=Depends(require_admin)):
         if old['role']=='admin' and db.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]<=1: raise HTTPException(409,'至少保留一个管理员')
         if db.execute("SELECT 1 FROM downloads WHERE user_id=? AND status IN ('queued','downloading')",(uid,)).fetchone(): raise HTTPException(409,'该账号有处理中的下载任务')
         if db.execute("SELECT 1 FROM ai_turns WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone() or db.execute("SELECT 1 FROM import_jobs WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone():raise HTTPException(409,'请等待该账号的回答或文档识别完成后再删除')
-        for table in ['quote_history','checkin_notes','library_images','wallpapers','practice_sessions','api_monitors','ai_turns','ai_threads','ai_prompts','assistants','vaults','import_jobs','library_nodes','listening_segments','sessions','installed','balances','ledger','progress','events','downloads']: db.execute('DELETE FROM '+table+' WHERE user_id=?',(uid,))
+        if db.execute("SELECT 1 FROM companion_turns WHERE user_id=? AND status IN ('queued','running')",(uid,)).fetchone():raise HTTPException(409,'请等待该账号的拾光者任务完成后再删除')
+        companion_files=[r[0] for r in db.execute('SELECT filename FROM companion_media WHERE user_id=?',(uid,))]
+        for table in ['companion_messages','companion_turns','companion_memories','companion_media','companions','quote_history','checkin_notes','library_images','wallpapers','practice_sessions','api_monitors','ai_turns','ai_threads','ai_prompts','assistants','vaults','import_jobs','library_nodes','listening_segments','sessions','installed','balances','ledger','progress','events','downloads']: db.execute('DELETE FROM '+table+' WHERE user_id=?',(uid,))
         db.execute('DELETE FROM users WHERE id=?',(uid,))
         audit(db,u,'删除账号及全部业务数据',uid,public_user(old))
+    from .companion_media import ROOT as companion_media_root
+    for filename in companion_files:(companion_media_root/filename).unlink(missing_ok=True)
     return {'message':'账号及其业务数据已删除，管理日志保留'}
 
 class Rules(BaseModel):
