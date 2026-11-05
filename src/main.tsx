@@ -1,3 +1,4 @@
+import './compat';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import '@fontsource/instrument-sans/400.css';
