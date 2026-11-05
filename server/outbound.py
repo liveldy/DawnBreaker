@@ -1,7 +1,39 @@
 """User-configurable HTTPS APIs with DNS pinning and no redirects/private network access."""
-import http.client,ipaddress,json,socket,ssl
+import http.client,ipaddress,json,socket,ssl,os
+import httpx
 from urllib.parse import urlsplit,urlencode
 from fastapi import HTTPException
+from .ai_endpoints import is_xai
+from .xai_egress import configured_proxy
+
+MAX_RESPONSE=16*1024*1024
+
+def upstream_error(status):
+    hint={401:'密钥无效或已失效',403:'密钥权限或地区访问受限',402:'账户额度不足',404:'接口或模型不存在，请重新获取可用模型',429:'请求频率或额度达到限制'}.get(status,'请检查接口与模型配置' if status<500 else '上游服务暂时不可用')
+    return HTTPException(502,'模型 API 返回 HTTP '+str(status)+'：'+hint)
+
+def xai_network_error():
+    return HTTPException(502,'服务器无法连接 xAI，请联系管理员检查服务器出站网络或 xAI 代理配置；客户端的本机代理不会自动作用于服务器。')
+
+def proxy_request(url,body,headers,params,proxy):
+    # Administrator-only egress, restricted to exact official xAI HTTPS hosts.
+    # CONNECT resolves the official hostname at the proxy. TLS still verifies xAI;
+    # inference credentials are never sent in plaintext to the proxy.
+    value=urlsplit(proxy)
+    if value.scheme not in ('http','https') or not value.hostname or value.path not in ('','/') or value.query or value.fragment or any(c in proxy for c in '\r\n'):
+        raise HTTPException(503,'xAI 出站代理配置无效，请联系管理员')
+    try:
+        with httpx.Client(proxy=proxy,trust_env=False,follow_redirects=False,timeout=httpx.Timeout(120,connect=20)) as client:
+            with client.stream('POST' if body is not None else 'GET',url,content=json.dumps(body,ensure_ascii=False).encode('utf-8') if body is not None else None,headers=headers,params=params) as response:
+                if not 200<=response.status_code<300:raise upstream_error(response.status_code)
+                chunks=[];size=0
+                for chunk in response.iter_bytes():
+                    size+=len(chunk)
+                    if size>MAX_RESPONSE:raise HTTPException(502,'API 返回内容过大')
+                    chunks.append(chunk)
+                return json.loads(b''.join(chunks))
+    except HTTPException:raise
+    except Exception:raise xai_network_error()
 
 def endpoint(value):
     p=urlsplit(value.strip())
@@ -18,7 +50,14 @@ def public_addresses(host,port):
     if not addresses or any(not ipaddress.ip_address(ip).is_global for ip in addresses):raise HTTPException(422,'API 地址不能指向本机、内网或系统保留地址')
     return addresses
 def request_json(url,body=None,headers=None,params=None):
-    parsed,port=endpoint(url);ips=public_addresses(parsed.hostname,port)
+    parsed,port=endpoint(url)
+    request_headers={'Accept':'application/json','Content-Type':'application/json','User-Agent':'DawnBreaker',**(headers or {})}
+    official_xai=is_xai(url);proxy=configured_proxy() if official_xai else ''
+    if official_xai and proxy:return proxy_request(url,body,request_headers,params,proxy)
+    try:ips=public_addresses(parsed.hostname,port)
+    except HTTPException:
+        if official_xai:raise xai_network_error()
+        raise
     class Pinned(http.client.HTTPSConnection):
         def connect(self):
             last=None
@@ -29,11 +68,13 @@ def request_json(url,body=None,headers=None,params=None):
     conn=Pinned(parsed.hostname,port,timeout=120,context=ssl.create_default_context())
     try:
         payload=json.dumps(body,ensure_ascii=False).encode('utf-8') if body is not None else None
-        conn.request('POST' if body is not None else 'GET',(parsed.path or '/')+('?' + urlencode(params,doseq=True) if params else ''),body=payload,headers={'Accept':'application/json','Content-Type':'application/json','User-Agent':'DawnBreaker/1.2.1',**(headers or {})})
-        response=conn.getresponse();data=response.read(16*1024*1024+1)
-        if response.status<200 or response.status>=300:raise HTTPException(502,'模型 API 返回 HTTP '+str(response.status)+'，请检查接口、密钥和模型 ID')
-        if len(data)>16*1024*1024:raise HTTPException(502,'API 返回内容过大')
+        conn.request('POST' if body is not None else 'GET',(parsed.path or '/')+('?' + urlencode(params,doseq=True) if params else ''),body=payload,headers=request_headers)
+        response=conn.getresponse();data=response.read(MAX_RESPONSE+1)
+        if response.status<200 or response.status>=300:raise upstream_error(response.status)
+        if len(data)>MAX_RESPONSE:raise HTTPException(502,'API 返回内容过大')
         return json.loads(data)
     except HTTPException:raise
-    except Exception:raise HTTPException(502,'API 暂时无法连接或返回格式无效，请检查配置后重试')
+    except Exception:
+        if official_xai:raise xai_network_error()
+        raise HTTPException(502,'API 暂时无法连接或返回格式无效，请检查配置后重试')
     finally:conn.close()

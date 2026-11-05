@@ -3,6 +3,7 @@ uvicorn==0.54.0
 pwdlib[argon2]==0.3.1
 yt-dlp==2026.10.26
 httpx==0.28.1
+PyYAML==6.0.3
 tzdata>=2025.2
 python-multipart>=0.0.22
 Pillow>=11.3

@@ -1,6 +1,7 @@
 import {useState,useEffect,useRef,type ReactNode,type FormEvent} from 'react';
 import {Search,Plus,ArrowLeft,X,ShieldCheck,Trash2,ChevronRight} from 'lucide-react';
 import {api,post,date,number,type Plugin} from './api';
+import AdminEgress from './AdminEgress';
 
 type Props={action:(fn:()=>Promise<any>)=>Promise<boolean>;notify:(message:string)=>void;busy:boolean;self:string};
 const currencies:Record<string,string>={essence:'日光精华',stones:'破晓石'};
@@ -9,7 +10,7 @@ function useData(path:string,key=0){const[data,setData]=useState<any>(null),[err
 function Status({r}:{r:ReturnType<typeof useData>}){return r.error?<p className="form-error">{r.error}<button className="text-button" onClick={r.reload}>重新读取</button></p>:!r.data?<p className="muted admin-loading">正在读取…</p>:null;}
 function Pager({page,total,change,size=20}:{page:number;total:number;change:(v:number)=>void;size?:number}){return <div className="pagination"><span>{total} 条 · 第 {page} / {Math.max(1,Math.ceil(total/size))} 页</span><button disabled={page===1} onClick={()=>change(page-1)}>上一页</button><button disabled={page*size>=total} onClick={()=>change(page+1)}>下一页</button></div>;}
 export default function Admin(props:Props){
- const[tab,setTab]=useState('users');return <><header className="page-title"><div><h1>管理后台</h1><p>管理全平台账号、资产、插件内容与规则。修改实时生效。</p></div><span className="admin-badge"><ShieldCheck size={16}/>管理员</span></header><div className="tabs admin-tabs">{[['users','用户与数据'],['content','内容编辑'],['rules','全局规则'],['schedule','语录日历'],['audit','修改记录']].map(([id,t])=><button key={id} className={tab===id?'selected':''} onClick={()=>setTab(id)}>{t}</button>)}</div>{tab==='users'?<Users {...props}/>:tab==='rules'?<Rules {...props}/>:tab==='content'?<Content {...props}/>:tab==='schedule'?<QuoteSchedule {...props}/>:<Audit/>}</>;
+ const[tab,setTab]=useState('users');return <><header className="page-title"><div><h1>管理后台</h1><p>管理全平台账号、资产、插件内容与规则。修改实时生效。</p></div><span className="admin-badge"><ShieldCheck size={16}/>管理员</span></header><div className="tabs admin-tabs">{[['users','用户与数据'],['content','内容编辑'],['rules','全局规则'],['schedule','语录日历'],['egress','AI 出站'],['audit','修改记录']].map(([id,t])=><button key={id} className={tab===id?'selected':''} onClick={()=>setTab(id)}>{t}</button>)}</div>{tab==='users'?<Users {...props}/>:tab==='rules'?<Rules {...props}/>:tab==='content'?<Content {...props}/>:tab==='schedule'?<QuoteSchedule {...props}/>:tab==='egress'?<AdminEgress/>:<Audit/>}</>;
 }
 function Users(props:Props){
  const[q,setQ]=useState(''),[page,setPage]=useState(1),[selected,setSelected]=useState(''),[create,setCreate]=useState(false);const r=useData('/admin/users?q='+encodeURIComponent(q)+'&page='+page);

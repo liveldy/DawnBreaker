@@ -12,6 +12,7 @@ from ..core import require_plugin,installed,emit,today
 from ..db import connect,now
 from ..secret_store import seal,open_secret
 from ..outbound import endpoint,request_json
+from ..ai_endpoints import api_base,models_url
 from .library import node,folder,within,create_document
 from ..milestones import record_edit
 from ..api_meter import owner as meter_owner,metered
@@ -38,10 +39,7 @@ def thread(d,uid,id):
     return dict(row)
 def public(row):return json.loads(row['config'])|{'id':row['id'],'has_key':bool(row['secret']),'updated_at':row['updated_at']}
 def base_url(config):
-    base=config['api_base'].rstrip('/')
-    for suffix in ['/chat/completions','/messages']:
-        if base.endswith(suffix):base=base[:-len(suffix)]
-    return base
+    return api_base(config['api_base'])
 def model_request(config,key,url,body,headers):
     uid=meter_owner.get()
     if uid:return metered(uid,base_url(config),key,config['model'],url,body,headers)
@@ -103,7 +101,7 @@ def models(id:str,u=Depends(user)):
     with connect() as d:row=assistant(d,u['id'],id)
     config=json.loads(row['config']);key=open_secret(row['secret'])
     headers={'Authorization':'Bearer '+key} if config['protocol'] in ('openai','responses') else {'x-api-key':key,'anthropic-version':'2023-06-01'} if config['protocol']=='anthropic' else {'x-goog-api-key':key}
-    data=request_json(base_url(config)+'/models',headers=headers)
+    data=request_json(models_url(base_url(config),language_only=True),headers=headers)
     rows=data.get('data',data.get('models',[]))
     return {'models':[{'id':m.get('id') or m.get('name','').removeprefix('models/'),'name':m.get('displayName') or m.get('id') or m.get('name')} for m in rows if isinstance(m,dict)][:1000]}
 
@@ -126,7 +124,7 @@ def probe_models(body:Probe,u=Depends(user)):
         if base_url(previous)!=base_url({'api_base':body.api_base}) or previous['protocol']!=body.protocol:raise HTTPException(422,'接口或协议已更改，请填写对应的 API 密钥后读取模型')
         key=open_secret(stored['secret'])
     config={'api_base':body.api_base};headers={'x-goog-api-key':key} if body.protocol=='gemini' else {'x-api-key':key,'anthropic-version':'2023-06-01'} if body.protocol=='anthropic' else {'Authorization':'Bearer '+key}
-    data=request_json(base_url(config)+'/models',headers=headers)
+    data=request_json(models_url(base_url(config),language_only=True),headers=headers)
     rows=data.get('data',data.get('models',[]))
     return {'models':[{'id':m.get('id') or m.get('name','').removeprefix('models/'),'name':m.get('displayName') or m.get('id') or m.get('name')} for m in rows if isinstance(m,dict)][:1000]}
 @router.post('/prompts')

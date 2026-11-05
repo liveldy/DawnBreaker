@@ -7,6 +7,7 @@ from pydantic import BaseModel,Field
 from ..core import require_plugin
 from ..db import connect,now
 from ..outbound import endpoint,request_json
+from ..ai_endpoints import api_base,is_xai,models_url
 from ..secret_store import seal,open_secret
 from ..api_meter import metered,fingerprint
 from ..providers import PROVIDERS
@@ -26,7 +27,7 @@ def owned(d,uid,id):
     return dict(r)
 def public(row):
     with connect() as d:
-        counts=d.execute("SELECT COUNT(*),SUM(json_extract(payload,'$.tokens')),SUM(CASE WHEN json_extract(payload,'$.tokens') IS NULL THEN 1 ELSE 0 END) FROM events WHERE user_id=? AND kind='api-usage' AND json_extract(payload,'$.key_hash')=? AND json_extract(payload,'$.base')=?",(row['user_id'],fingerprint(open_secret(row['secret'])),row['api_base'])).fetchone()
+        counts=d.execute("SELECT COUNT(*),SUM(json_extract(payload,'$.tokens')),SUM(CASE WHEN json_extract(payload,'$.tokens') IS NULL THEN 1 ELSE 0 END) FROM events WHERE user_id=? AND kind='api-usage' AND json_extract(payload,'$.key_hash')=? AND json_extract(payload,'$.base') IN (?,?)",(row['user_id'],fingerprint(open_secret(row['secret'])),row['api_base'],api_base(row['api_base']))).fetchone()
     return {k:row[k] for k in ('id','name','api_base','protocol','updated_at','provider_id')}|{'has_billing_key':bool(row['billing_secret'])}|{'has_key':bool(row['secret']),'report':json.loads(row['report']),'local_usage':{'requests':counts[0],'tokens':0 if not counts[0] else counts[1],'missing_token_reports':counts[2] or 0}}
 def number(value):
     try:v=float(value);return v if math.isfinite(v) and v>=0 else None
@@ -34,11 +35,11 @@ def number(value):
 def auth(row,key):
     return {'x-goog-api-key':key} if row['protocol']=='gemini' else {'x-api-key':key,'anthropic-version':'2023-06-01'} if row['protocol']=='anthropic' else {'Authorization':'Bearer '+key}
 def probe(row,key):
-    base=row['api_base'].rstrip('/');host=urlsplit(base).hostname
+    base=api_base(row['api_base']);host=urlsplit(base).hostname
     report={'provider':host,'balance':None,'spent':None,'requests':None,'tokens':None,'currency':None,'models':[],'statistics_note':'此平台未提供通用账单接口；空缺项目表示不可获取。','fetched_at':now(),'errors':[]}
     start=time.perf_counter()
     try:
-        data=request_json(base+'/models',headers=auth(row,key));report['latency_ms']=round((time.perf_counter()-start)*1000)
+        data=request_json(models_url(base),headers=auth(row,key));report['latency_ms']=round((time.perf_counter()-start)*1000)
         rows=data.get('data',data.get('models'))
         if not isinstance(rows,list):raise HTTPException(502,'未返回兼容的模型列表，请参照运营商文档填写模型 ID')
         report['models_available']=True
@@ -46,7 +47,16 @@ def probe(row,key):
             if not isinstance(m,dict):continue
             id=m.get('id') or str(m.get('name','')).removeprefix('models/')
             if not id:continue
-            price=m.get('pricing',{});report['models'].append({'id':id,'provider':m.get('owned_by'),'input_price':number(price.get('prompt'))*1e6 if number(price.get('prompt')) is not None else None,'output_price':number(price.get('completion'))*1e6 if number(price.get('completion')) is not None else None})
+            price=m.get('pricing',{});price=price if isinstance(price,dict) else {}
+            input_price=number(price.get('prompt'));output_price=number(price.get('completion'))
+            input_price=input_price*1e6 if input_price is not None else None
+            output_price=output_price*1e6 if output_price is not None else None
+            if is_xai(base):
+                # xAI publishes USD cents per 100 million tokens, not dollars/token.
+                raw_in=number(m.get('prompt_text_token_price'));raw_out=number(m.get('completion_text_token_price'))
+                if raw_in is not None:input_price=raw_in/10000
+                if raw_out is not None:output_price=raw_out/10000
+            report['models'].append({'id':id,'provider':m.get('owned_by'),'input_price':input_price,'output_price':output_price})
     except HTTPException as e:report['errors'].append('模型列表：'+str(e.detail))
     try:
         if host=='api.deepseek.com':
@@ -62,7 +72,7 @@ def provider_statistics(row,key,report):
     provider=PROVIDERS.get(row['provider_id'])
     if not provider:return
     report['provider']=provider['name'];report['docs']=provider['docs'];report['statistics_note']=provider['note']
-    base=row['api_base'].rstrip('/')
+    base=api_base(row['api_base'])
     if urlsplit(base).netloc!=urlsplit(provider['base']).netloc:
         report['statistics_note']+=' 自定义地域 / 中转地址未匹配预设，未转发管理密钥。';return
     adapter=provider['billing']
@@ -152,11 +162,11 @@ def speed_test(id:str,body:SpeedTest,u=Depends(user)):
         report=json.loads(row['report'])
         if time.time()-report.get('test_epoch',0)<15:raise HTTPException(429,'请间隔 15 秒再次测速')
         if report.get('models') and body.model not in {m['id'] for m in report.get('models',[])}:raise HTTPException(422,'请先刷新并选择平台支持的模型')
-        base=row['api_base'];key=open_secret(row['secret']);start=time.perf_counter()
+        base=api_base(row['api_base']);stored_base=row['api_base'];key=open_secret(row['secret']);start=time.perf_counter()
         # Persist rate limit before the network request, including failed attempts.
         with connect(True) as d:
             current=owned(d,u['id'],id);report=json.loads(current['report'])
-            if current['secret']!=row['secret'] or current['api_base']!=base:raise HTTPException(409,'配置已更改，请重新测速')
+            if current['secret']!=row['secret'] or current['api_base']!=stored_base:raise HTTPException(409,'配置已更改，请重新测速')
             if time.time()-report.get('test_epoch',0)<15:raise HTTPException(429,'请间隔 15 秒再次测速')
             report['test_epoch']=time.time();d.execute('UPDATE api_monitors SET report=? WHERE id=?',(json.dumps(report,ensure_ascii=False),id))
         if row['protocol']=='responses':url=base+'/responses';payload={'model':body.model,'max_output_tokens':32,'input':'Reply with one short sentence: hello.'}
@@ -166,6 +176,6 @@ def speed_test(id:str,body:SpeedTest,u=Depends(user)):
         data=metered(u['id'],base,key,body.model,url,payload,auth(row,key));elapsed=time.perf_counter()-start;usage=data.get('usage',data.get('usageMetadata',{})) or {};output=number(usage.get('completion_tokens',usage.get('output_tokens',usage.get('candidatesTokenCount'))))
         with connect(True) as d:
             current=owned(d,u['id'],id)
-            if current['secret']!=row['secret'] or current['api_base']!=base:raise HTTPException(409,'配置已更改，请重新测速')
+            if current['secret']!=row['secret'] or current['api_base']!=stored_base:raise HTTPException(409,'配置已更改，请重新测速')
             value=json.loads(current['report']);value['speed']={'model':body.model,'duration_ms':round(elapsed*1000),'output_tokens':output,'tokens_per_second':round(output/elapsed,2) if output is not None else None,'measured_at':now()};d.execute('UPDATE api_monitors SET report=? WHERE id=?',(json.dumps(value,ensure_ascii=False),id));return public(owned(d,u['id'],id))
     finally:LIMIT.release()

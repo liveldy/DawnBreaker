@@ -1,6 +1,7 @@
 """Provider-returned reasoning and native function calls, without invented thought text."""
 import json,re,uuid
 from fastapi import HTTPException
+from .ai_endpoints import api_base
 
 class ModelReply(str):
     def __new__(cls,text='',reasoning='',calls=None,wire=None,truncated=False):
@@ -13,9 +14,7 @@ def function(name,args,call_id=None):
     return {'id':call_id or uuid.uuid4().hex,'name':name,'arguments':args if isinstance(args,dict) else {}}
 
 def invoke(config,key,messages,system,request,max_tokens=None,tools=None):
-    model=config['model'];base=config['api_base'].rstrip('/');protocol=config['protocol'];limit=max_tokens or config['max_tokens']
-    for suffix in ['/chat/completions','/responses','/messages']:
-        if base.endswith(suffix):base=base[:-len(suffix)]
+    model=config['model'];base=api_base(config['api_base']);protocol=config['protocol'];limit=max_tokens or config['max_tokens']
     thinking=config.get('show_reasoning',True);body={};headers={};url=''
     if protocol=='responses':
         inputs=[]
