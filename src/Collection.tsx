@@ -30,7 +30,7 @@ export default function Collection({boot,action,busy}:Props){
  const switchMode=(next:string)=>{setMode(next);navigate([]);};
  if(error)return <div className="inline-error">{error}<button onClick={reload}>重试</button></div>;
  if(!data)return <div className="loading" role="status">正在打开珍藏阁…</div>;
- const crumbs=trail(data.albums,path),current=crumbs.at(-1),root=crumbs[0],children=current?.children||data.albums;
+ const crumbs=trail(data.albums,path),current=crumbs[crumbs.length-1],root=crumbs[0],children=current?.children||data.albums;
  const nodes=children.filter(n=>n.name.includes(query));
  const memberIds=new Set(current?.card_ids||[]);
  const cards=data.cards.filter(c=>memberIds.has(c.id)&&(!ownedOnly||!!c.owned)&&(rarity==='all'||c.rarity===rarity)&&c.name.includes(query));

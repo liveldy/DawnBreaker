@@ -3,8 +3,8 @@
 Plugins are registered on the server; installation is per-account entitlement,
 never downloading executable code onto the client.
 """
-from . import checkin, quotes, vocabulary, collection, music, journal, downloader,library,constellation,vault,atlas,warp,wallpaper
-MODULES = [journal, checkin, quotes, collection, music, vocabulary, downloader,library,constellation,vault,atlas,warp,wallpaper]
+from . import checkin, quotes, vocabulary, collection, music, journal, downloader,library,constellation,vault,atlas,warp,wallpaper,system
+MODULES = [journal, checkin, quotes, collection, music, vocabulary, downloader,library,constellation,vault,atlas,warp,wallpaper,system]
 CONTENT = [
     {'id':'sgs','name':'三国杀·珍藏阁','type':'content','parent':'collection','description':'武将经典、界限突破与多人同名皮肤卡册。收录姓名、故事与完整原画。','category':'收藏内容','version':'1.0.1','icon':'Layers','note':'资料与图像来源：哔哩哔哩游戏三国杀 BWIKI。美术版权归原权利方。'},
     {'id':'lol-quotes','name':'英雄联盟·流光笺','type':'content','parent':'quotes','description':'59 句英雄语录，配有原声朗读。','category':'金句内容','version':'1.0.0','icon':'Quote','note':'用户提供的英雄联盟语音内容。'},

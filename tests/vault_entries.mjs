@@ -1,0 +1,17 @@
+import assert from'node:assert/strict';import{buildSync}from'esbuild';
+const load=path=>{const result=buildSync({entryPoints:[path],bundle:true,platform:'node',format:'cjs',write:false}),module={exports:{}};new Function('module','exports',result.outputFiles[0].text)(module,module.exports);return module.exports;};
+const model=load('src/vaultEntries.ts'),crypto=load('src/vaultCrypto.ts');
+const old={check:'dawn-vault-v1',entries:[{id:'legacy',title:'原有密码',username:'old-user',password:'original-password',url:'https://example.com',notes:'原始备注',created_at:'2026-01-01',updated_at:'2026-01-01'}]};
+const entries=model.normalizeEntries(old);assert.equal(entries[0].type,'password');assert.equal(entries[0].password,'original-password');
+const card={...entries[0],id:'card',type:'card',title:'测试银行卡',username:'',password:'',url:'',fields:{number:'6222000012345678',issuer:'测试银行',cvv:'123'},custom:[{id:'custom',label:'柜台电话',value:'4000000000',secret:true}]};
+const identity={...entries[0],id:'person',type:'identity',title:'个人档案',username:'',password:'',url:'',fields:{document_number:'TEST-ID-1234',full_name:'测试者',phone:'13800000000'}};
+assert(!model.entrySummary(card).includes(card.fields.number));assert(model.entrySummary(card).includes('5678'));assert(model.matchesEntry(card,'4000000000'));
+assert(model.matchesEntry(identity,'TEST-ID'));assert.equal(model.primaryValue(identity).value,'TEST-ID-1234');
+const mixed=model.vaultPayload([...entries,card,identity]),salt=crypto.randomBytes(16),key=await crypto.derive('A-long-master-password',salt),sealed=crypto.encrypt(key,'account-a',mixed,salt,2);
+const serialized=JSON.stringify(sealed);for(const secret of['6222000012345678','original-password','TEST-ID-1234'])assert(!serialized.includes(secret));
+const reopened=model.normalizeEntries(crypto.decrypt(key,'account-a',sealed));assert.deepEqual(reopened.map(e=>e.type),['password','card','identity']);assert.equal(reopened[1].fields.cvv,'123');assert.equal(reopened[0].password,'original-password');
+assert.throws(()=>crypto.decrypt(key,'account-b',sealed));const wrong=await crypto.derive('Wrong-master-password',salt);assert.throws(()=>crypto.decrypt(wrong,'account-a',sealed));
+const csv=model.csvExport([{...card,title:'=SUM(A1:A2)',notes:'note,"quoted"\nsecond'}]);assert(csv.includes("\"'=SUM(A1:A2)\""));assert(csv.includes('note,""quoted""\nsecond'));
+assert.throws(()=>model.normalizeEntries({check:'dawn-vault-v1',entries:[{...card,type:'future'}]}),/更新客户端/);
+assert.throws(()=>model.normalizeEntries({check:'dawn-vault-v1',entries:[card,card]}),/标识无效/);
+key.fill(0);wrong.fill(0);console.log('PASS: legacy vault migration, three encrypted types, masking, custom fields, exports, account binding and bad-password protection');

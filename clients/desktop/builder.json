@@ -19,7 +19,8 @@
     "widget.html",
     "widget.js",
     "web/**",
-    "wallpaper-input.ps1"
+    "wallpaper-input.ps1",
+    "system-tools.ps1"
   ],
   "extraResources": [
     {
@@ -42,6 +43,7 @@
       ]
     }
   ],
+  "asarUnpack": ["system-tools.ps1"],
   "win": {
     "target": [
       "portable"

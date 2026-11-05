@@ -4,7 +4,7 @@ from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,Field
 from ..core import require_plugin
 from ..db import connect,now
-MANIFEST={'id':'vault','name':'暗格','description':'用独立主密码锁住密码。内容在本机加密后同步，支持搜索、复制和导出。','category':'隐私','icon':'LockKeyhole','ui':'vault'}
+MANIFEST={'id':'vault','name':'暗格','description':'用独立主密码收好密码、卡片与个人信息。内容在本机加密后同步，支持自定义字段与导出。','category':'隐私','icon':'LockKeyhole','ui':'vault'}
 router=APIRouter(prefix='/api/plugins/vault',tags=['暗格']);user=require_plugin('vault')
 class Envelope(BaseModel):
     version:int=Field(ge=0)

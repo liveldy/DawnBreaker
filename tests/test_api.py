@@ -32,7 +32,7 @@ def test_core_is_empty_and_plugin_apis_are_guarded(client):
     for p in ['checkin','quotes','journal','vocabulary','collection','music','downloader']:
         assert client.get('/api/plugins/'+p).status_code==403
     assert client.get('/api/plugins/collection/image/1000').status_code==403
-    assert len(client.get('/api/catalog').json()['plugins'])==18
+    assert len(client.get('/api/catalog').json()['plugins'])==19
 
 def test_authentication_and_sessions(client):
     register(client)
