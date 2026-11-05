@@ -93,8 +93,10 @@ def test_redirect_cannot_reach_private_network(monkeypatch):
     with pytest.raises(HTTPException) as error:search.fetch('https://www.google.com/search?q=test')
     assert error.value.status_code==422
 
-def test_reply_segmentation_is_model_decided():
+def test_reply_segmentation_is_model_decided(tmp_path,monkeypatch):
+    monkeypatch.setattr(db,'DB',tmp_path/'not-initialized.db')
     for count in [1,2,5,8]:assert len(jobs.parse_reply(json.dumps({'bubbles':['message '+str(i) for i in range(count)]}))[0])==count
+    assert not db.DB.exists(), 'Reply parsing must work before database initialization'
     assert jobs.parse_reply('{"bubbles":[]}',allow_empty=True)[0]==[]
     assert jobs.parse_reply('{"bubbles":"一条消息"}\n备注')[0]==['一条消息']
     assert jobs.parse_reply('{"text":"自然回复"}')[0]==['自然回复']

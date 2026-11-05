@@ -67,7 +67,7 @@ def retry(uid,token):
 class ReplyFormatError(HTTPException):
     def __init__(self,message='回复格式无法读取，请重试'):super().__init__(502,message)
 
-def parse_reply(raw,allow_empty=False,max_bubbles=None):
+def parse_reply(raw,allow_empty=False,max_bubbles=12):
     text=str(raw).strip();text=re.sub(r'^```(?:json)?\s*|\s*```$','',text)
     try:value=json.JSONDecoder(strict=False).raw_decode(text)[0]
     except ValueError:
@@ -77,7 +77,7 @@ def parse_reply(raw,allow_empty=False,max_bubbles=None):
         if 'bubbles' not in value:value['bubbles']=value.get('text') or value.get('message') or value.get('messages')
         if isinstance(value.get('bubbles'),str):value['bubbles']=[value['bubbles']]
     if not isinstance(value,dict) or not isinstance(value.get('bubbles'),list):raise ReplyFormatError()
-    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:max_bubbles or profile('deepseek')['generation']['max_bubbles']] if isinstance(s,str) and s.strip()]
+    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:max_bubbles] if isinstance(s,str) and s.strip()]
     if not bubbles and not allow_empty:raise ReplyFormatError('没有收到可读取的回复，请重试')
     return bubbles,value
 
