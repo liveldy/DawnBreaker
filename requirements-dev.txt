@@ -7,4 +7,5 @@ mutagen==1.47.0
 beautifulsoup4==4.15.0
 mwparserfromhell==0.7.2
 playwright==1.64.1
+python-docx==1.2.0
 

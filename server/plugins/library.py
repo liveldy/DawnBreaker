@@ -68,7 +68,7 @@ def listing(u=Depends(user)):
         rows=[dict(r) for r in d.execute('SELECT id,parent_id,kind,title,revision,source_job_id,updated_at FROM library_nodes WHERE user_id=? ORDER BY kind DESC,title',(u['id'],))]
         jobs=[dict(r) for r in d.execute('SELECT id,parent_id,title,mode,status,error,document_id,created_at FROM import_jobs WHERE user_id=? AND deleted=0 ORDER BY created_at DESC LIMIT 30',(u['id'],))]
         storage=usage(d,u['id'])
-    return {'nodes':rows,'imports':jobs,'storage':storage,'ocr':'Pix2Text','supports':['markdown','latex','pdf','image']}
+    return {'nodes':rows,'imports':jobs,'storage':storage,'ocr':'Pix2Text','supports':['markdown','latex','pdf','image','doc','docx']}
 @router.post('/nodes',status_code=201)
 def create(body:Create,u=Depends(user)):
     with connect(True) as d:
@@ -133,19 +133,20 @@ def run_import(uid,id):
         if not job:return
         d.execute("UPDATE import_jobs SET status='running',updated_at=? WHERE id=?",(now(),id))
     work=job_path(uid,id);output=work/'result.json'
-    executable=os.environ.get('DAWN_OCR_PYTHON','/opt/dawnbreaker/ocr-venv/bin/python')
+    word=Path(job['filename']).suffix.lower() in ('.doc','.docx')
+    executable=sys.executable if word else os.environ.get('DAWN_OCR_PYTHON','/opt/dawnbreaker/ocr-venv/bin/python')
     try:
         if not Path(executable).is_file():raise RuntimeError('OCR 引擎尚未就绪，请稍后重试；仍可直接导入 Markdown / LaTeX 文件。')
-        result=subprocess.run([executable,str(Path(__file__).parents[1]/'ocr_worker.py'),str(work/job['filename']),str(output),job['mode']],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=1200)
-        if result.returncode!=0 or not output.is_file():raise RuntimeError('识别未完成，请检查文件是否清晰、未加密，或改用公式识别模式重试。')
-        content=json.loads(output.read_text(encoding='utf-8'))['markdown']
+        result=subprocess.run([executable,str(Path(__file__).parents[1]/('word_worker.py' if word else 'ocr_worker.py')),str(work/job['filename']),str(output),job['mode']],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=240 if word else 1200)
+        if result.returncode!=0 or not output.is_file():raise RuntimeError(result.stderr.strip()[-300:] if word and result.returncode==2 else '转换未完成，请检查文件是否完整、未加密，或拆分后重试。')
+        converted=json.loads(output.read_text(encoding='utf-8'));content=converted['markdown'];warning='；'.join(converted.get('warnings',[])) or None
         if not content.strip():raise RuntimeError('没有识别到内容，请检查文件或切换识别模式。')
         if len(content)>1000000:raise RuntimeError('识别内容过长，请拆分书籍后重试。')
         output.unlink(missing_ok=True)
         with connect(True) as d:
             ensure(d,uid,len(content.encode('utf8')))
             doc=create_document(d,uid,job['parent_id'],job['title'],content,id)
-            d.execute("UPDATE import_jobs SET status='completed',document_id=?,error=NULL,updated_at=? WHERE id=?",(doc['id'],now(),id))
+            d.execute("UPDATE import_jobs SET status='completed',document_id=?,error=?,updated_at=? WHERE id=?",(doc['id'],warning,now(),id))
     except Exception as e:
         if isinstance(e,HTTPException) and e.status_code==413:
             generated=work/'output'
@@ -157,7 +158,7 @@ def run_import(uid,id):
 @router.post('/imports',status_code=202)
 async def import_file(file:UploadFile=File(...),parent_id:str=Form(''),mode:Literal['auto','document','formula']=Form('auto'),u=Depends(user)):
     extension=Path(file.filename or '').suffix.lower();title=Path(file.filename or '新文档').stem[:200]
-    if extension not in ('.md','.markdown','.txt','.tex','.pdf','.png','.jpg','.jpeg','.webp'):raise HTTPException(422,'支持 Markdown、LaTeX、PDF、PNG、JPEG、WebP')
+    if extension not in ('.md','.markdown','.txt','.tex','.doc','.docx','.pdf','.png','.jpg','.jpeg','.webp'):raise HTTPException(422,'支持 Word（DOC / DOCX）、Markdown、LaTeX、PDF、PNG、JPEG、WebP')
     content=await file.read(30*1024*1024+1)
     if not content or len(content)>30*1024*1024:raise HTTPException(413,'文件需小于 30 MB')
     parent_id=parent_id or None

@@ -10,6 +10,9 @@ DawnBreaker is distributed under AGPL-3.0-or-later. Existing copyright notices a
 | last-token model-atlas | [source](https://github.com/liveldy/last-token/tree/main/model-atlas) | GPL-3.0 | Adapted dataset normalization in `src/atlasData.ts`; chart and UI rewritten |
 | MetaCubeX meta-rules-dat | [source and data origins](https://github.com/MetaCubeX/meta-rules-dat) | GPL-3.0; upstream data notices apply | Pinned country.mmdb, geoip.dat and geosite.dat, bundled for first-start initialization; hashes and source commit in `geodata/manifest.json` |
 | holiday-cn | [source](https://github.com/NateScarlet/holiday-cn) | MIT | Published mainland China holiday schedules, government references retained in `server/calendar-data` |
+| Pandoc | [source](https://github.com/jgm/pandoc) | GPL-2.0-or-later | Separately installed server executable for Word / OMML to Markdown / LaTeX; not bundled with clients |
+| LibreOffice Writer / Math | [source](https://github.com/LibreOffice/core) | MPL-2.0; upstream notices apply | Separately installed server programs for legacy DOC conversion; not bundled with clients |
+| python-docx | [source](https://github.com/python-openxml/python-docx) | MIT | Development-only synthetic Word fixtures |
 | jQuery | 3.6.0 | MIT | LinkSwift dependency |
 | SweetAlert2 | 11.4.8; theme-dark 5.0.26 | MIT | LinkSwift dependency |
 | js-md5 | 0.7.3 | MIT | LinkSwift dependency |

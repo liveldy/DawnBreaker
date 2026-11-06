@@ -62,7 +62,7 @@ def init():
         for column,default in [('trace','[]'),('reasoning',''),('error','')]:
             if column not in {r[1] for r in db.execute('PRAGMA table_info(ai_turns)')}:
                 db.execute("ALTER TABLE ai_turns ADD COLUMN "+column+" TEXT NOT NULL DEFAULT '"+default+"'")
-        for table,column in [('ai_threads','archived'),('import_jobs','deleted')]:
+        for table,column in [('ai_threads','archived'),('ai_threads','context_cursor'),('import_jobs','deleted')]:
             if column not in {r[1] for r in db.execute('PRAGMA table_info('+table+')')}:
                 db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' INTEGER NOT NULL DEFAULT 0')
         db.executescript('''

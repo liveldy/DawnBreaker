@@ -93,7 +93,7 @@ def test_ai_rolls_context_into_library_memory_and_refuses_truncated_edits(client
     workspace=create(client,'folder');memory=create(client,'folder');doc=create(client,parent=workspace['id'],text='x'*20000)
     a=assistant(client,workspace_id=workspace['id'],memory_id=memory['id'],context_chars=8000);t=thread(client,a);summaries=[]
     def model(config,key,messages,system,max_tokens=None,tools=None):
-        if max_tokens==1200:summaries.append(messages);return '# 长期记忆\n用户正在整理数学笔记。'
+        if max_tokens==600:summaries.append(messages);return json.dumps({'memory':'用户整理数学笔记','summary':'继续校对公式'},ensure_ascii=False)
         return json.dumps({'reply':'继续整理。','edits':[{'document_id':doc['id'],'revision':1,'markdown':'must not replace truncated content'}]})
     monkeypatch.setattr(ai,'invoke',model)
     for i in range(8):
@@ -102,7 +102,7 @@ def test_ai_rolls_context_into_library_memory_and_refuses_truncated_edits(client
         assert result.json()['edits']==[]
     assert summaries
     nodes=client.get('/api/plugins/library').json()['nodes'];saved=[n for n in nodes if n['parent_id']==memory['id'] and n['kind']=='document'];assert len(saved)==1
-    assert '长期记忆' in client.get('/api/plugins/library/nodes/'+saved[0]['id']).json()['markdown']
+    assert '用户整理数学笔记' in client.get('/api/plugins/library/nodes/'+saved[0]['id']).json()['markdown']
     assert client.get('/api/plugins/library/nodes/'+doc['id']).json()['markdown']=='x'*20000
 
 def test_avatar_validation_resize_and_isolation(client,monkeypatch,tmp_path):

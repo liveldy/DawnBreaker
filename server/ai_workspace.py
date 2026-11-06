@@ -21,7 +21,7 @@ TOOLS=[
     schema('rename_document','重命名一份文档，保留正文。',{'document_id':S,'revision':I,'title':S},['document_id','revision','title']),
     schema('move_document','将文档移至工作空间内的其他目录。',{'document_id':S,'revision':I,'parent_id':S},['document_id','revision','parent_id']),
     schema('delete_document','删除指定版本的文档；先暂存，按用户的保存选项统一提交。不能删除工作空间或目录。',{'document_id':S,'revision':I},['document_id','revision']),
-    schema('remember','向已配置记忆库追加长期事实、偏好或进度；不要存储密码和 API Key。',{'markdown':S},['markdown']),
+    schema('remember','仅记住新增或改变的长期事实、偏好、约束和未完成事项。每条用最短短语；不要重复已有记忆、复述问答、抄写文档或存储密码/API Key。不要把未保存操作写成已完成。',{'markdown':S},['markdown']),
 ]
 
 def parse_reply(text):
@@ -91,7 +91,7 @@ def run_agent(config,key,messages,system,documents,complete_docs,memory_text,inv
         if name=='remember':
             if not config.get('memory_id'):raise HTTPException(409,'未配置记忆库')
             value=args.get('markdown','')
-            if not isinstance(value,str) or len(value)>12000:raise HTTPException(422,'记忆内容过长')
+            if not isinstance(value,str) or len(value)>800 or sum(map(len,memory))+len(value)>1200:raise HTTPException(422,'请将新增记忆压缩成短语，每次不超过 800 字符，每轮不超过 1200 字符')
             memory.append(value);trace('memory','已准备长期记忆，回答完成后保存');return {'prepared':True}
         if name in ('create_document','create_folder'):
             parent=parent_for(args.get('parent_id'));name_title=title(args.get('title'));text=args.get('markdown','') if name=='create_document' else ''

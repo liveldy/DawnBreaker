@@ -26,7 +26,7 @@ def main():
         if NAME=='dawnbreaker-website':raise RuntimeError('Website repository is not a source target')
         if not (ROOT/'.git').exists():git('init','-b','main')
         git('config','user.name',owner);git('config','user.email',owner+'@users.noreply.github.com')
-        paths=['.gitignore','.github','LICENSE','README.md','DESIGN.md','PRODUCT.md','COLLECTIONS.md','package.json','package-lock.json','tsconfig.json','vite.config.ts','capacitor.config.json','index.html','requirements.txt','requirements-dev.txt','src','public','server','clients','android','deploy','scripts','tests','docs','third_party','release-notes','website']
+        paths=['.gitignore','.github','AGENTS.md','LICENSE','README.md','DESIGN.md','PRODUCT.md','COLLECTIONS.md','package.json','package-lock.json','tsconfig.json','vite.config.ts','capacitor.config.json','index.html','requirements.txt','requirements-dev.txt','src','public','server','clients','android','deploy','scripts','tests','docs','third_party','release-notes','website']
         git('add','--',*paths)
         files=git('ls-files','-z').split('\x00');files=[p for p in files if p]
         forbidden=re.compile(r'(^|/)(data|mods?|node_modules|\.local|\.tooling|\.taste-skill|artifacts|release|build|dist|\.gradle|__pycache__)(/|$)|(^|/)(DawnBreaker\.md|local\.properties|service-secret\.key)$|\.(db|jks|keystore|aar|exe|apk)$',re.I)

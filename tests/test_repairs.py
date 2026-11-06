@@ -67,7 +67,7 @@ def test_ai_native_tools_real_save_memory_and_old_json(client,monkeypatch,tmp_pa
     value=result.json();assert value['applied'] and value['reasoning'] and any(e['kind']=='memory_saved' for e in value['trace'])
     assert client.get('/api/plugins/library/nodes/'+doc['id']).json()['markdown']=='已修改内容 $x^2$'
     nodes=client.get('/api/plugins/library').json()['nodes'];memory=next(n for n in nodes if n['parent_id']==mem['id'])
-    assert '修改文档' in client.get('/api/plugins/library/nodes/'+memory['id']).json()['markdown']
+    assert '已保存' in client.get('/api/plugins/library/nodes/'+memory['id']).json()['markdown']
     with db.connect(True) as d:d.execute('UPDATE ai_threads SET messages=? WHERE id=?',(json.dumps([{'role':'assistant','content':json.dumps({'reply':'可读正文','edits':[]},ensure_ascii=False)}]),tid))
     assert client.get(url).json()['messages'][0]['content']=='可读正文'
 
@@ -121,7 +121,7 @@ def test_ai_memory_quota_failure_rolls_back_document_and_events(client,monkeypat
     from server import secret_store,library_storage
     monkeypatch.setattr(secret_store,'DATA',tmp_path);uid=register(client);install(client,'library','constellation')
     root=create(client,'folder');memory=create(client,'folder');doc=create(client,parent=root['id'],text='original');a=assistant(client,workspace_id=root['id'],memory_id=memory['id']);tid=thread(client,a)
-    with db.connect(True) as d:d.execute('UPDATE users SET library_quota_bytes=? WHERE id=?',(library_storage.usage(d,uid)['used_bytes']+50,uid))
+    with db.connect(True) as d:d.execute('UPDATE users SET library_quota_bytes=? WHERE id=?',(library_storage.usage(d,uid)['used_bytes']+5,uid))
     monkeypatch.setattr(ai,'invoke',lambda *args,**kwargs:json.dumps({'reply':'a long answer '*100,'edits':[{'document_id':doc['id'],'revision':1,'markdown':'new'}]}))
     result=client.post('/api/plugins/constellation/threads/'+tid+'/chat',json={'request_id':'quota-atomic-turn','content':'update','apply_edits':True});assert result.status_code==413,result.text
     assert client.get('/api/plugins/library/nodes/'+doc['id']).json()['markdown']=='original'
