@@ -26,7 +26,7 @@ async function registerOffline(getWindow,target,session){
   try{
    const headers=Object.fromEntries(request.headers);for(const key of Object.keys(headers))if(['origin','referer','cookie','host','content-length','connection'].includes(key.toLowerCase()))delete headers[key];
    if(music&&ranged==='bytes=0-')for(const key of Object.keys(headers))if(key.toLowerCase()==='range')delete headers[key];
-   const body=['GET','HEAD'].includes(request.method)?undefined:Buffer.from(await request.arrayBuffer());if(body?.length>34*1024*1024)return new Response('Too large',{status:413});
+   const body=['GET','HEAD'].includes(request.method)?undefined:Buffer.from(await request.arrayBuffer());const maxBody=(uri.pathname==='/api/plugins/vault'?46:34)*1024*1024;if(body?.length>maxBody)return new Response('Too large',{status:413});
    const response=await session.fetch(new URL(url,target).href,{method:request.method,headers,body,credentials:'include',signal:AbortSignal.timeout(music||request.method!=='GET'?300000:url.startsWith('/api/plugins/atlas/live')?90000:url==='/api/bootstrap'||url==='/api/health'?5000:30000)});const h=responseHeaders(response);
    if(response.status>=500&&request.method==='GET'){const cached=await readCached(url,ranged);if(cached)return cached;}
    if(response.status===401&&url==='/api/bootstrap'&&requestGeneration===generation)await setAccount('');
