@@ -12,6 +12,7 @@ from ..outbound import endpoint,request_json
 from ..ai_endpoints import api_base,models_url
 from ..companion_config import settings,profile
 from ..companion_reply import display_text
+from .. import companion_stickers as stickers
 from ..companion_state import owned,emotion,mood_label,memory_strength,prune
 
 MANIFEST={'id':'companion','name':'拾光者','description':'与 Grok、DeepSeek 自然聊天。短句聊天、情绪变化、渐进记忆与偶尔主动的问候。','category':'聊天','icon':'MessagesSquare','ui':'companion'}
@@ -157,13 +158,22 @@ def default_avatar(id:str,u=Depends(user)):
 
 def message_public(d,r,uid,id):
     attachments=[]
+    sticker=None
+    if r['sticker']:
+        try:sticker=stickers.public(owned(d,uid,id)['provider'],id,r['sticker'])
+        except HTTPException:pass
     for token in json.loads(r['media']):
         try:attachments.append(media.public(media.owned(d,uid,token,id)))
         except HTTPException:pass
-    return {'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else display_text(r['text']) if r['role']=='assistant' else r['text'],'quote':json.loads(r['quote']) if r['quote'] else None,'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id'],'request_id':r['request_id'],'turn_status':r['turn_status'],'turn_error':r['turn_error']}
+    return {'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else display_text(r['text']) if r['role']=='assistant' else r['text'],'quote':json.loads(r['quote']) if r['quote'] else None,'sticker':sticker,'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id'],'request_id':r['request_id'],'turn_status':r['turn_status'],'turn_error':r['turn_error']}
 
 MESSAGE_SELECT="SELECT m.*,t.request_id,t.status AS turn_status,t.error AS turn_error FROM companion_messages m LEFT JOIN companion_turns t ON t.id=m.turn_id AND t.user_id=m.user_id"
 VISIBLE="m.user_id=? AND m.companion_id=? AND m.hidden_at IS NULL AND m.visible_at<=?"
+
+@router.get('/{id}/stickers/{sticker_id}')
+def sticker_art(id:str,sticker_id:str,u=Depends(user)):
+    with db.connect() as d:row=owned(d,u['id'],id)
+    return FileResponse(stickers.path(row['provider'],sticker_id),media_type='image/png',headers={'Cache-Control':'private, max-age=86400','X-Content-Type-Options':'nosniff'})
 
 @router.get('/{id}/messages')
 def messages(id:str,before:int=Query(0,ge=0),around:int=Query(0,ge=0),message_revision:int=Query(-1,ge=-1),requests:str=Query('',max_length=11000),u=Depends(user)):

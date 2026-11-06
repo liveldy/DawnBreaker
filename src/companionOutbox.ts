@@ -4,7 +4,7 @@ import {upload} from './workspace';
 
 export type ChatMedia={id:string;kind:'image'|'audio'|'video';url:string;size:number;duration:number};
 export type DraftFile={id:string;kind:ChatMedia['kind'];name:string;blob?:Blob;server?:ChatMedia};
-export type ChatQuote={id:number;role:string;name:string;text:string;media_kinds:ChatMedia['kind'][]};
+export type ChatQuote={id:number;role:string;name:string;text:string;media_kinds:(ChatMedia['kind']|'sticker')[]};
 export type Outgoing={key:string;owner:string;conversation:string;request_id:string;text:string;files:DraftFile[];quote?:ChatQuote|null;created_at:string;status:'sending'|'failed'|'accepted'|'canceled';error:string};
 let database:Promise<IDBDatabase>|undefined;
 function db(){return database||(database=new Promise((resolve,reject)=>{const r=indexedDB.open('dawn-chat-outbox',1);r.onupgradeneeded=()=>r.result.createObjectStore('messages',{keyPath:'key'}).createIndex('conversation',['owner','conversation']);r.onsuccess=()=>resolve(r.result);r.onerror=()=>{database=undefined;reject(r.error);};}));}

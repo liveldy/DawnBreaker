@@ -7,6 +7,7 @@ def snapshot(d,row,message_id):
     if not source:raise HTTPException(404,'要引用的消息不存在')
     cfg=json.loads(row['config']);name='你' if source['role']=='user' else cfg.get('display_name') or ('Grok' if row['provider']=='grok' else 'DeepSeek')
     kinds=[]
+    if source['sticker']:kinds.append('sticker')
     for token in json.loads(source['media']):
         media=d.execute('SELECT kind FROM companion_media WHERE id=? AND user_id=? AND companion_id=?',(token,row['user_id'],row['id'])).fetchone()
         if media:kinds.append(media[0])

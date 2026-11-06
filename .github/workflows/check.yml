@@ -12,7 +12,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: node tests/atlas_labels.mjs
+      - run: node tests/atlas_resize.mjs
       - run: node tests/vault_entries.mjs
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest tests/test_xai.py tests/test_admin_egress.py tests/test_companion.py tests/test_companion_tools.py tests/test_companion_controls.py tests/test_companion143.py tests/test_workspace143.py -q
+      - run: python -m pytest tests/test_xai.py tests/test_admin_egress.py tests/test_companion.py tests/test_companion_tools.py tests/test_companion_controls.py tests/test_companion143.py tests/test_workspace143.py tests/test_companion_stickers.py -q
       - run: python scripts/source_smoke.py

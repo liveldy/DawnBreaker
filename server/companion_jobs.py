@@ -14,6 +14,7 @@ from .ai_protocol import invoke
 from .companion_config import profile,settings
 from .companion_reply import parse_reply,ReplyFormatError,display_text
 from .companion_quotes import snapshot as quote_snapshot,prompt as quoted_prompt
+from . import companion_stickers as stickers
 from .companion_transport import wire,transcribe,post_json_bytes
 from .companion_state import owned,emotion,mood_label,reply_probability,proactive_probability,quiet,next_opportunity,recall,remember,episode,conversation_prompt
 
@@ -124,15 +125,15 @@ def chat(row,turn,body):
     from .companion_agent import converse
     result=converse(row,turn,messages,conversation_prompt(row,memory,proactive),config,key,lambda config,key,url,body,headers:request_json(url,body,headers),generated)
     notices.extend(result.get('web_notices',[]))
-    try:bubbles,value_result=parse_reply(result['raw'],bool(result['media_ids']),generation['max_bubbles'])
+    try:bubbles,value_result=parse_reply(result['raw'],bool(result['media_ids'] or result['stickers']),generation['max_bubbles'])
     except ReplyFormatError:
-        if result['media_ids']:
+        if result['media_ids'] or result['stickers']:
             bubbles=[];value_result={};notices.append('媒体已发送，本次附言未能读取')
         else:
             # Re-request only the final malformed model step; completed tools stay cached.
             with db.connect(True) as d:d.execute("UPDATE companion_actions SET status='failed' WHERE id=(SELECT id FROM companion_actions WHERE user_id=? AND turn_id=? AND kind='plan' ORDER BY created_at DESC,rowid DESC LIMIT 1)",(uid,turn['id']))
             raise
-    return {'bubbles':bubbles,'emotion':update_emotion(value,value_result.get('emotion') if isinstance(value_result.get('emotion'),dict) else {},row['provider']),'memories':value_result.get('memories',[]),'source_id':source,'user_text':latest,'notices':notices,'media_ids':result['media_ids'],'sources':result['sources'],'spoken':result['spoken'],'tool_errors':result['tool_errors']}
+    return {'bubbles':bubbles,'emotion':update_emotion(value,value_result.get('emotion') if isinstance(value_result.get('emotion'),dict) else {},row['provider']),'memories':value_result.get('memories',[]),'source_id':source,'user_text':latest,'notices':notices,'media_ids':result['media_ids'],'stickers':result['stickers'],'sources':result['sources'],'spoken':result['spoken'],'tool_errors':result['tool_errors']}
 
 
 def generated(row,turn,body):
@@ -206,8 +207,12 @@ def run(uid,token):
                 message=d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,created_at,visible_at,proactive,sources) VALUES(?,?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',text,db.now(),stamp+delay,int(turn['kind']=='proactive'),json.dumps(result.get('sources',[]) if i==len(result['bubbles'])-1 else [],ensure_ascii=False)))
                 episode(d,uid,row['id'],text,message.lastrowid,'assistant')
                 delay+=tuning['delay_min']+(tuning['delay_max']-tuning['delay_min'])*secrets.randbelow(1000)/1000
+            for sticker_id in result.get('stickers',[])[:1]:
+                label='[表情包：'+stickers.PACKS[row['provider']][int(sticker_id)-1][0]+']'
+                d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,created_at,visible_at,proactive,sticker) VALUES(?,?,?,?,?,?,?,?,?)',(uid,row['id'],token,'assistant',label,db.now(),stamp+delay,int(turn['kind']=='proactive'),sticker_id))
+                delay+=tuning['media_delay']
             if not result.get('silent'):d.execute('UPDATE companions SET last_assistant_at=?,updated_at=? WHERE id=?',(stamp,db.now(),row['id']))
-            summary={'silent':bool(result.get('silent')),'bubble_count':len(result.get('bubbles',[])),'media_ids':result.get('media_ids',[]),'notices':result.get('notices',[]),'tool_errors':result.get('tool_errors',[])}
+            summary={'silent':bool(result.get('silent')),'bubble_count':len(result.get('bubbles',[])),'media_ids':result.get('media_ids',[]),'stickers':result.get('stickers',[]),'notices':result.get('notices',[]),'tool_errors':result.get('tool_errors',[])}
             d.execute("UPDATE companion_turns SET status='completed',result=?,updated_at=? WHERE id=? AND user_id=?",(json.dumps(summary),db.now(),token,uid))
     except Exception as error:
         message=str(error.detail) if isinstance(error,HTTPException) else '这条消息处理失败，请重试；已有聊天和记忆保留'

@@ -84,6 +84,7 @@ class Generation(Model):
         return self
 
 class Tools(Model):
+    sticker_enabled:bool=True
     search_enabled:bool=True
     read_enabled:bool=True
     image_enabled:bool=True
@@ -153,7 +154,8 @@ TOOL_TEXT={
  'read_webpage':'精读 HTTPS 网页中与问题相关的正文。查询关键词尽量使用网页正文的语言。',
  'generate_image':'按对话需要生成图片并直接发送，不要求用户打开生成面板。本轮同类请求复用结果。',
  'generate_video':'按对话需要生成视频并直接发送。本轮同类请求复用结果。',
- 'send_voice':'选择用语音而非文字表达时调用，直接发送语音，不重复发送相同文字。'}
+ 'send_voice':'选择用语音而非文字表达时调用，直接发送语音，不重复发送相同文字。',
+ 'send_sticker':'按情绪和聊天语境，自行选用你自己的专属表情包，不必等待用户提出。自然、克制地使用，不要每轮都发；每轮最多一张，可只发表情，也可搭配自然文字。'}
 
 class Settings(Model):
     system_prompt:str=Field(min_length=1,max_length=40000)
@@ -162,6 +164,13 @@ class Settings(Model):
     providers:Providers
     proactive:Proactive=Field(default_factory=Proactive)
     tool_descriptions:dict[str,str]=Field(default_factory=lambda:copy.deepcopy(TOOL_TEXT))
+    @model_validator(mode='before')
+    @classmethod
+    def upgrade_sticker_tool(cls,value):
+        # Existing administrator settings keep their prompts and rules after the new tool is added.
+        if isinstance(value,dict) and isinstance(value.get('tool_descriptions'),dict):
+            value={**value,'tool_descriptions':{'send_sticker':TOOL_TEXT['send_sticker'],**value['tool_descriptions']}}
+        return value
     @model_validator(mode='after')
     def tool_keys(self):
         if set(self.tool_descriptions)!=set(TOOL_TEXT) or any(not v or len(v)>4000 for v in self.tool_descriptions.values()):raise ValueError('工具说明须保留全部既有名称，每项为 1—4000 字')
