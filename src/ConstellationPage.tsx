@@ -1,9 +1,10 @@
 import AssistantChat from './AssistantChat';
-import{useState}from'react';import{Plus,Settings2,Trash2,RefreshCw,Bot,Folder,Brain,LayoutGrid,List}from'lucide-react';
+import{useState,useEffect}from'react';import{Plus,Settings2,Trash2,RefreshCw,Bot,Folder,Brain,LayoutGrid,List}from'lucide-react';
 import{api,post}from'./api';import{useApp}from'./context';import{useData,Sheet}from'./workspace';import type{LibraryNode}from'./LibraryPage';
 type Assistant={id?:string;name:string;family:string;prompt:string;model:string;protocol:string;api_base:string;api_key?:string;workspace_id:string|null;memory_id:string|null;temperature:number|null;max_tokens:number;auto_save?:boolean;show_reasoning?:boolean;context_chars:number;has_key?:boolean;clear_key?:boolean};
 const blank:Assistant={name:'',family:'claude',prompt:'你是一位认真、友善的助手。使用 Markdown 和 LaTeX 书写。',model:'',protocol:'openai',api_base:'',api_key:'',workspace_id:null,memory_id:null,temperature:null,max_tokens:8192,auto_save:true,show_reasoning:true,context_chars:32000};
 export default function ConstellationPage(){const{notify}=useApp();const r=useData('/plugins/constellation');const[selected,setSelected]=useState<Assistant|null>(null),[form,setForm]=useState<Assistant|null>(null),[busy,setBusy]=useState(false),[remove,setRemove]=useState<Assistant|null>(null);const library=useData(r.data?.library_enabled?'/plugins/library':null);const[modelList,setModelList]=useState<any[]>([]),[modelBusy,setModelBusy]=useState(false),[promptTitle,setPromptTitle]=useState('');
+ useEffect(()=>{const changed=()=>library.reload();window.addEventListener('dawn:library-changed',changed);return()=>window.removeEventListener('dawn:library-changed',changed);},[r.data?.library_enabled]);
  const[view,setView]=useState(()=>localStorage.getItem('dawn:assistant-view')||'grid');
  const families=r.data?.families||[],folders:LibraryNode[]=r.data?.library_enabled?library.data?.nodes.filter((n:LibraryNode)=>n.kind==='folder')||[]:[];
  const chooseFamily=(id:string)=>{const provider=families.find((f:any)=>f.id===id);setForm(f=>f?{...f,family:id,api_base:provider?.api_base||'',protocol:provider?.protocol||'openai',model:'',api_key:'',has_key:false,clear_key:true}:f);setModelList([]);};

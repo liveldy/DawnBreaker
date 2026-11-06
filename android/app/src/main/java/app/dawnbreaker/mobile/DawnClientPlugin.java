@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 @CapacitorPlugin(name="DawnClient")
 public class DawnClientPlugin extends Plugin {
     @PluginMethod public void setAtlasMode(PluginCall call){getActivity().runOnUiThread(()->{if(getActivity() instanceof MainActivity)((MainActivity)getActivity()).setAtlasMode(call.getBoolean("active",false));call.resolve();});}
+    @PluginMethod public void setCompanionMode(PluginCall call){getActivity().runOnUiThread(()->{if(getActivity() instanceof MainActivity)((MainActivity)getActivity()).companionFullscreen=call.getBoolean("active",false);call.resolve();});}
 
     @PluginMethod public void saveText(PluginCall call){
         String filename=call.getString("filename","破晓导出.txt").replaceAll("[\\\\/:\\r\\n]","_");String mime=call.getString("mime","text/plain");String content=call.getString("content","");

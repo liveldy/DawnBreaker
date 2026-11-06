@@ -12,6 +12,8 @@ from .outbound import request_json
 from .ai_endpoints import api_base
 from .ai_protocol import invoke
 from .companion_config import profile,settings
+from .companion_reply import parse_reply,ReplyFormatError,display_text
+from .companion_quotes import snapshot as quote_snapshot,prompt as quoted_prompt
 from .companion_transport import wire,transcribe,post_json_bytes
 from .companion_state import owned,emotion,mood_label,reply_probability,proactive_probability,quiet,next_opportunity,recall,remember,episode,conversation_prompt
 
@@ -42,10 +44,12 @@ def submit(uid,id,body,proactive=False):
             if row['provider']=='deepseek' and not cfg.get('image_model'):raise HTTPException(422,'请先配置识图模型')
             if attachment['kind']=='audio' and not cfg.get('voice_enabled'):raise HTTPException(422,'请先启用语音服务')
         token=uuid.uuid4().hex;created=db.now()
+        quote=quote_snapshot(d,row,body['reply_to_id']) if body.get('reply_to_id') else None
         d.execute('INSERT INTO companion_turns(id,user_id,companion_id,request_id,input_hash,kind,status,input,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(token,uid,id,request_id,fingerprint,kind,'queued',json.dumps(body,ensure_ascii=False),created,created))
         if not proactive:
             text=body['text'].strip() or ('发段语音给我' if kind=='voice' else '')
             d.execute('INSERT INTO companion_messages(user_id,companion_id,turn_id,role,text,media,created_at,visible_at) VALUES(?,?,?,?,?,?,?,?)',(uid,id,token,'user',text,json.dumps(body.get('media_ids',[])),created,stamp))
+            if quote:d.execute('UPDATE companion_messages SET quote=? WHERE turn_id=? AND user_id=?',(json.dumps(quote,ensure_ascii=False),token,uid))
             if d.execute('SELECT 1 FROM companion_message_hides WHERE user_id=? AND companion_id=? AND request_id=?',(uid,id,request_id)).fetchone():d.execute("UPDATE companion_messages SET hidden_at=? WHERE user_id=? AND companion_id=? AND turn_id=? AND role='user'",(created,uid,id,token))
             d.execute('UPDATE companions SET last_user_at=?,next_chance=?,updated_at=? WHERE id=?',(stamp,next_opportunity(stamp,stamp),created,id))
         result={'id':token,'status':'queued','kind':kind,'error':None}
@@ -63,23 +67,6 @@ def retry(uid,token):
         d.execute("UPDATE companion_turns SET status='queued',error=NULL,updated_at=? WHERE id=?",(db.now(),token));kind=turn['kind']
     (MEDIA_POOL if kind in ('image','video','voice') else CHAT_POOL).submit(run,uid,token)
     return {'id':token,'status':'queued','kind':kind,'error':None}
-
-class ReplyFormatError(HTTPException):
-    def __init__(self,message='回复格式无法读取，请重试'):super().__init__(502,message)
-
-def parse_reply(raw,allow_empty=False,max_bubbles=12):
-    text=str(raw).strip();text=re.sub(r'^```(?:json)?\s*|\s*```$','',text)
-    try:value=json.JSONDecoder(strict=False).raw_decode(text)[0]
-    except ValueError:
-        if text.startswith(('{','[')):raise ReplyFormatError()
-        value={'bubbles':[s.strip() for s in re.split(r'\n{2,}',text) if s.strip()]}
-    if isinstance(value,dict):
-        if 'bubbles' not in value:value['bubbles']=value.get('text') or value.get('message') or value.get('messages')
-        if isinstance(value.get('bubbles'),str):value['bubbles']=[value['bubbles']]
-    if not isinstance(value,dict) or not isinstance(value.get('bubbles'),list):raise ReplyFormatError()
-    bubbles=[str(s).strip().rstrip('。') for s in value['bubbles'][:max_bubbles] if isinstance(s,str) and s.strip()]
-    if not bubbles and not allow_empty:raise ReplyFormatError('没有收到可读取的回复，请重试')
-    return bubbles,value
 
 def update_emotion(old,proposal,provider='deepseek'):
     cfg=profile(provider)['emotion']
@@ -103,7 +90,9 @@ def chat(row,turn,body):
     for r in history:
         if attachments and r['turn_id']==turn['id']:continue
         if remaining<=0:break
-        content=r['text'][:min(12000 if r['turn_id']==turn['id'] else generation['old_message_chars'],remaining)];remaining-=len(content)
+        content=(display_text(r['text']) if r['role']=='assistant' else r['text'])[:min(12000 if r['turn_id']==turn['id'] else generation['old_message_chars'],remaining)]
+        if r['quote']:content=quoted_prompt(content,r['quote'])
+        content=content[:remaining];remaining-=len(content)
         if r['turn_id']!=turn['id'] and json.loads(r['media']):content+='\n[此前发送的附件，内容见相邻回复]'
         if content:messages.append({'role':r['role'],'content':content})
     messages.reverse()
@@ -123,7 +112,8 @@ def chat(row,turn,body):
         elif attachment['kind']=='audio':latest+='\n[语音转写] '+transcribe(base,key,media.wav(attachment),cfg.get('voice_model',''))
     if attachments:
         # Replace the current user message, never put user images into a system/assistant role.
-        messages.append({'role':'user','content':latest or '看看我发来的内容'})
+        with db.connect() as d:current=d.execute("SELECT quote FROM companion_messages WHERE turn_id=? AND user_id=? AND role='user'",(turn['id'],uid)).fetchone()
+        messages.append({'role':'user','content':quoted_prompt(latest or '看看我发来的内容',current['quote'] if current else None)})
     if proactive:messages.append({'role':'user','content':settings()['proactive_input']})
     model=cfg['image_model'] if image_inputs and row['provider']=='deepseek' else cfg['chat_model']
     config={'family':row['provider'],'protocol':cfg['protocol'],'api_base':base,'model':model,'max_tokens':generation['max_tokens'],'show_reasoning':False}
@@ -133,6 +123,7 @@ def chat(row,turn,body):
         messages[-1]['content']=parts
     from .companion_agent import converse
     result=converse(row,turn,messages,conversation_prompt(row,memory,proactive),config,key,lambda config,key,url,body,headers:request_json(url,body,headers),generated)
+    notices.extend(result.get('web_notices',[]))
     try:bubbles,value_result=parse_reply(result['raw'],bool(result['media_ids']),generation['max_bubbles'])
     except ReplyFormatError:
         if result['media_ids']:

@@ -1,0 +1,12 @@
+import {useEffect,useRef,useState} from 'react';
+import {Capacitor,registerPlugin} from '@capacitor/core';
+const display=Capacitor.isPluginAvailable('DawnClient')?registerPlugin<{setCompanionMode:(v:{active:boolean})=>Promise<void>}>('DawnClient'):null;
+export default function useChatFullscreen(){
+ const ref=useRef<HTMLElement>(null),active=useRef(false);const [expanded,setExpanded]=useState(false);
+ const native=(value:boolean)=>display?.setCompanionMode({active:value}).catch(()=>{});
+ function exit(){active.current=false;setExpanded(false);native(false);if(history.state?.dawnCompanionFullscreen)history.replaceState({...history.state,dawnCompanionFullscreen:false},'');if(document.fullscreenElement===ref.current)document.exitFullscreen().catch(()=>{});}
+ async function toggle(){if(active.current){exit();return;}active.current=true;history.pushState({...history.state,dawnCompanionFullscreen:true},'',location.href);setExpanded(true);native(true);try{await ref.current?.requestFullscreen?.();if(!active.current&&document.fullscreenElement===ref.current)document.exitFullscreen().catch(()=>{});}catch{/* Use the same full-window layout when native fullscreen is unavailable. */}}
+ useEffect(()=>{const pop=()=>{if(active.current&&!history.state?.dawnCompanionFullscreen)exit();},key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&active.current)exit();},change=()=>{if(active.current&&!document.fullscreenElement)exit();},back=()=>exit();window.addEventListener('popstate',pop);window.addEventListener('keydown',key);document.addEventListener('fullscreenchange',change);window.addEventListener('dawn:exit-companion',back);return()=>{active.current=false;native(false);window.removeEventListener('popstate',pop);window.removeEventListener('keydown',key);document.removeEventListener('fullscreenchange',change);window.removeEventListener('dawn:exit-companion',back);if(history.state?.dawnCompanionFullscreen)history.replaceState({...history.state,dawnCompanionFullscreen:false},'');if(document.fullscreenElement===ref.current)document.exitFullscreen().catch(()=>{});};},[]);
+ useEffect(()=>{if(!expanded)return;const previous=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{document.body.style.overflow=previous;};},[expanded]);
+ return {ref,expanded,toggle};
+}

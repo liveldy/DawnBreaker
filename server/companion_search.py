@@ -1,5 +1,6 @@
 """Free multi-engine discovery and query-focused article extraction, no browser execution."""
-import base64,http.client,ipaddress,math,re,socket,ssl
+import base64,http.client,ipaddress,math,re,socket,ssl,time,threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit,urlunsplit,urljoin,urlencode,parse_qs,parse_qsl
 import httpx
@@ -13,6 +14,15 @@ from .companion_state import keywords
 SEARCH_HOSTS={'www.google.com','www.bing.com','cn.bing.com','html.duckduckgo.com'}
 TRUSTED_PROXY_HOSTS=SEARCH_HOSTS|{'docs.x.ai','api-docs.deepseek.com'}
 LIMIT=2*1024*1024
+_cache=OrderedDict();_cooldowns={};_lock=threading.Lock()
+
+class PageUnavailable(HTTPException):
+    def __init__(self,status=502,retry_after=0):
+        self.upstream_status=status;self.retry_after=retry_after
+        super().__init__(502,'来源访问频率受限，稍后再试或更换来源' if status==429 else '来源正文暂时无法读取，可使用其他来源或搜索摘要')
+
+def clear_cache():
+    with _lock:_cache.clear();_cooldowns.clear()
 
 def checked(url):
     value=urlsplit(url)
@@ -20,7 +30,7 @@ def checked(url):
     if port!=443:raise HTTPException(422,'网页仅支持标准 HTTPS 地址')
     return value
 
-def fetch(url):
+def _fetch_once(url):
     for _ in range(4):
         value=checked(url);host=value.hostname;headers={'User-Agent':'Mozilla/5.0 (compatible; DawnBreaker/1.4; article reader)','Accept':'text/html,application/xhtml+xml,text/plain','Accept-Language':'zh-CN,zh;q=0.9,en;q=0.7','Accept-Encoding':'identity'}
         proxy=''
@@ -30,7 +40,7 @@ def fetch(url):
         if proxy:
             with httpx.Client(proxy=proxy,trust_env=False,follow_redirects=False,timeout=httpx.Timeout(12,connect=8)) as c:
                 with c.stream('GET',url,headers=headers) as r:
-                    status=r.status_code;location=r.headers.get('location');mime=r.headers.get('content-type','');parts=[];size=0
+                    status=r.status_code;location=r.headers.get('location');mime=r.headers.get('content-type','');retry=r.headers.get('retry-after','0');parts=[];size=0
                     for part in r.iter_bytes():
                         size+=len(part)
                         if size>LIMIT:raise HTTPException(502,'网页正文超过读取大小限制')
@@ -47,14 +57,41 @@ def fetch(url):
                     raise last or OSError('connection failed')
             c=Pinned(host,443,context=ssl.create_default_context())
             try:
-                c.request('GET',(value.path or '/')+('?' +value.query if value.query else ''),headers=headers);r=c.getresponse();status=r.status;location=r.getheader('location');mime=r.getheader('content-type','');raw=r.read(LIMIT+1)
+                c.request('GET',(value.path or '/')+('?' +value.query if value.query else ''),headers=headers);r=c.getresponse();status=r.status;location=r.getheader('location');mime=r.getheader('content-type','');retry=r.getheader('retry-after','0');raw=r.read(LIMIT+1)
                 if len(raw)>LIMIT:raise HTTPException(502,'网页正文超过读取大小限制')
             finally:c.close()
         if status in (301,302,303,307,308) and location:url=urljoin(url,location);continue
-        if status!=200:raise HTTPException(502,'网页返回 HTTP '+str(status))
+        if status!=200:raise PageUnavailable(status,min(300,max(0,int(retry))) if str(retry).isdigit() else 0)
         if not any(kind in mime.lower() for kind in ('text/html','application/xhtml+xml','text/plain','application/rss+xml','text/xml','application/xml')):raise HTTPException(422,'只读取文本网页，不下载程序或文件')
         return raw,url,mime
     raise HTTPException(502,'网页重定向过多')
+
+def fetch(url):
+    host=checked(url).hostname;stamp=time.monotonic()
+    with _lock:
+        hit=_cache.get(url)
+        if hit and hit[0]>stamp:_cache.move_to_end(url);return hit[1]
+        if _cooldowns.get(host,0)>stamp:raise PageUnavailable(429,int(_cooldowns[host]-stamp))
+    for attempt in range(2):
+        try:
+            result=_fetch_once(url)
+            with _lock:
+                _cooldowns.pop(host,None)
+                _cache[url]=(time.monotonic()+180,result);_cache.move_to_end(url)
+                while len(_cache)>12:_cache.popitem(last=False)
+            return result
+        except HTTPException as error:
+            status=getattr(error,'upstream_status',0);delay=getattr(error,'retry_after',0)
+            if status==429:
+                with _lock:_cooldowns[host]=time.monotonic()+max(30,delay)
+                # Respect a long Retry-After without blocking the conversation or hammering the host.
+                if delay>1 or attempt:raise
+            elif status not in (502,503,504):raise
+            if attempt:raise
+        except (OSError,httpx.HTTPError,http.client.HTTPException):
+            if attempt:raise PageUnavailable()
+        time.sleep(1)
+    raise PageUnavailable()
 
 def clean_link(link,base):
     link=urljoin(base,link);value=urlsplit(link)
@@ -133,8 +170,9 @@ def focus(text,query,limit=8500):
 
 def read_page(url,query):
     try:
-        raw,final,mime=fetch(str(url)[:2000]);doc=html.fromstring(raw);titles=doc.xpath('//title/text()');title=' '.join(titles)[:220]
-        text=raw.decode('utf-8',errors='replace') if 'text/plain' in mime else trafilatura.extract(raw,favor_precision=True,include_comments=False,include_tables=False,include_links=False) or ''
+        raw,final,mime=fetch(str(url)[:2000]);plain='text/plain' in mime
+        titles=[] if plain else html.fromstring(raw).xpath('//title/text()');title=' '.join(titles)[:220] or urlsplit(final).hostname
+        text=raw.decode('utf-8',errors='replace') if plain else trafilatura.extract(raw,favor_precision=True,include_comments=False,include_tables=False,include_links=False) or ''
         content=focus(text,str(query)[:300])
         return {'url':final,'title':title,'content':content,'relevant':bool(content),'note':'' if content else '正文未找到与问题直接相关的段落，不将导航、广告或无关内容作为依据'}
     except HTTPException:raise

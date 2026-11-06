@@ -4,7 +4,8 @@ import {upload} from './workspace';
 
 export type ChatMedia={id:string;kind:'image'|'audio'|'video';url:string;size:number;duration:number};
 export type DraftFile={id:string;kind:ChatMedia['kind'];name:string;blob?:Blob;server?:ChatMedia};
-export type Outgoing={key:string;owner:string;conversation:string;request_id:string;text:string;files:DraftFile[];created_at:string;status:'sending'|'failed'|'accepted'|'canceled';error:string};
+export type ChatQuote={id:number;role:string;name:string;text:string;media_kinds:ChatMedia['kind'][]};
+export type Outgoing={key:string;owner:string;conversation:string;request_id:string;text:string;files:DraftFile[];quote?:ChatQuote|null;created_at:string;status:'sending'|'failed'|'accepted'|'canceled';error:string};
 let database:Promise<IDBDatabase>|undefined;
 function db(){return database||(database=new Promise((resolve,reject)=>{const r=indexedDB.open('dawn-chat-outbox',1);r.onupgradeneeded=()=>r.result.createObjectStore('messages',{keyPath:'key'}).createIndex('conversation',['owner','conversation']);r.onsuccess=()=>resolve(r.result);r.onerror=()=>{database=undefined;reject(r.error);};}));}
 export async function outboxList(owner:string,conversation:string):Promise<Outgoing[]>{const d=await db();return new Promise((resolve,reject)=>{const tx=d.transaction('messages'),r=tx.objectStore('messages').index('conversation').getAll([owner,conversation]);tx.oncomplete=()=>resolve(r.result.sort((a:Outgoing,b:Outgoing)=>a.created_at.localeCompare(b.created_at)));tx.onerror=()=>reject(tx.error);});}
@@ -22,12 +23,12 @@ export function useChatOutbox(owner:string,conversation:string,accepted:()=>void
   try{await patch(entry.key,o=>o.status==='canceled'?o:{...o,status:'sending',error:''});let current=(await outboxList(owner,conversation)).find(e=>e.key===entry.key);if(!current||current.status==='canceled')return;
    for(let i=0;i<current.files.length;i++){if(!alive.current||ctrl.signal.aborted)throw Error('发送中断，点击感叹号重发');if(current.files[i].server)continue;const attachment=current.files[i];if(!attachment.blob)throw Error('附件暂时无法读取');const form=new FormData();form.append('file',attachment.blob,attachment.name);const server:ChatMedia=await upload('/plugins/companion/'+conversation+'/upload?kind='+attachment.kind,form,ctrl.signal);await patch(entry.key,o=>({...o,files:o.files.map(f=>f.id===attachment.id?{...f,server}:f)}));current=(await outboxList(owner,conversation)).find(e=>e.key===entry.key);if(!current||current.status==='canceled')return;}
    if(!alive.current||ctrl.signal.aborted)throw Error('发送中断，点击感叹号重发');
-   await api('/plugins/companion/'+conversation+'/send',{method:'POST',signal:ctrl.signal,body:JSON.stringify({request_id:current.request_id,text:current.text,media_ids:current.files.map(f=>f.server!.id),kind:'chat'})});
+   await api('/plugins/companion/'+conversation+'/send',{method:'POST',signal:ctrl.signal,body:JSON.stringify({request_id:current.request_id,text:current.text,media_ids:current.files.map(f=>f.server!.id),kind:'chat',...(current.quote?{reply_to_id:current.quote.id}:{})})});
    await patch(entry.key,o=>o.status==='canceled'?o:{...o,status:'accepted',error:''});if(alive.current)callback.current();
   }catch(e){await outboxChange(entry.key,o=>o&&o.status!=='canceled'?{...o,status:'failed',error:(e as Error).name==='AbortError'?'连接超时，点击感叹号重发':(e as Error).message||'发送失败，点击感叹号重发'}:o);if(alive.current)await refresh();}
   finally{clearTimeout(timeout);running.current.delete(entry.key);}
  }
- async function enqueue(text:string,files:DraftFile[]){const request_id=crypto.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);const entry:Outgoing={key:[owner,conversation,request_id].join(':'),owner,conversation,request_id,text,files,created_at:new Date().toISOString(),status:'failed',error:'尚未发送，点击感叹号重发'};await outboxChange(entry.key,()=>entry);await refresh();return entry;}
+ async function enqueue(text:string,files:DraftFile[],quote?:ChatQuote|null){const request_id=crypto.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);const entry:Outgoing={key:[owner,conversation,request_id].join(':'),owner,conversation,request_id,text,files,quote,created_at:new Date().toISOString(),status:'failed',error:'尚未发送，点击感叹号重发'};await outboxChange(entry.key,()=>entry);await refresh();return entry;}
  async function acknowledge(ids:string[]){if(!ids.length)return;const rows=await outboxList(owner,conversation);for(const e of rows)if(ids.includes(e.request_id)&&e.status!=='canceled')await outboxChange(e.key,o=>o?.status==='canceled'?o:undefined);await refresh();}
  async function remove(entry:Outgoing){running.current.get(entry.key)?.abort();await patch(entry.key,o=>({...o,status:'canceled'}));await discardCanceled(entry);}
  return {items,storageError,enqueue,transmit,acknowledge,remove};

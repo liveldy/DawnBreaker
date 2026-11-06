@@ -56,7 +56,7 @@ def act(row,turn,call,generate):
         return {'error':message}
 
 def converse(row,turn,messages,system,config,key,request,generate):
-    uid=row['user_id'];tuning=profile(row['provider'])['tools'];tools=definitions(row);media=[];sources=[];spoken={};actions=0;errors=[]
+    uid=row['user_id'];tuning=profile(row['provider'])['tools'];tools=definitions(row);media=[];sources=[];spoken={};actions=0;errors=[];search_results={};web_failures=set();read_ok=False
     def source(item):
         if not item.get('url'):return
         previous=next((v for v in sources if v['url']==item['url']),None)
@@ -70,17 +70,28 @@ def converse(row,turn,messages,system,config,key,request,generate):
             stage(uid,turn['id'],'正在回复…')
             reply=invoke(config,key,messages,system,request,tools=tools if step<tuning['max_rounds']-1 and actions<tuning['max_calls'] else None)
             completed(uid,row['id'],turn['id'],id,'plan','model',{}, {'text':str(reply),'calls':reply.calls,'wire':reply.wire})
-        if not reply.calls:return {'raw':reply,'media_ids':media,'sources':sources[:8],'spoken':spoken,'tool_errors':errors}
+        if not reply.calls:
+            notices=['部分来源正文暂不可读，本次仅使用可取得的搜索摘要；摘要未经全文核实。'] if web_failures and not read_ok and search_results else ['本次未能读取来源正文，请稍后重试或提供其他来源。'] if web_failures and not read_ok else []
+            return {'raw':reply,'media_ids':media,'sources':sources[:8],'spoken':spoken,'tool_errors':list(dict.fromkeys(errors)),'web_notices':notices}
         if step==tuning['max_rounds']-1:raise HTTPException(502,'本轮工具调用次数已达到上限，请分成下一条消息继续')
         messages.append({'role':'assistant','wire':reply.wire})
         for call in reply.calls[:tuning['max_calls']]:
             actions+=1
             result=act(row,turn,call,generate) if actions<=tuning['max_calls'] else {'error':'本轮工具调用次数已达到上限'}
-            for item in result.get('results',[]):item['source_id']=source(item)
-            if result.get('relevant'):result['source_id']=source(result)
+            if call['name']=='search_web' and not result.get('results'):web_failures.add('search')
+            for item in result.get('results',[]):
+                item['source_id']=source(item);search_results[item['url']]=item
+            if call['name']=='read_webpage' and result.get('error'):
+                url=call['arguments'].get('url','');web_failures.add(url);snippet=search_results.get(url)
+                if snippet and snippet.get('snippet'):
+                    result={'url':url,'title':snippet['title'],'content':snippet['snippet'],'relevant':True,'snippet_only':True,'note':'正文无法访问，以上仅为搜索摘要，不是完整正文；可继续读取其他来源，不能声称已核实全文。'}
+                else:result=result|{'note':'此来源不可用，不要重复读取相同地址，请换用搜索结果中的其他来源。'}
+            if result.get('relevant'):
+                result['source_id']=source(result)
+                if call['name']=='read_webpage' and not result.get('snippet_only'):read_ok=True
             for token in result.get('media_ids',[]):
                 if token not in media:media.append(token)
                 if result.get('spoken_text'):spoken[token]=result['spoken_text']
-            if result.get('error'):errors.append(result['error'])
+            if result.get('error') and call['name'] not in ('search_web','read_webpage'):errors.append(result['error'])
             messages.append({'role':'tool','tool_call_id':call['id'],'name':call['name'],'content':json.dumps(result,ensure_ascii=False)})
     raise HTTPException(502,'没有收到最终回复，请重试')

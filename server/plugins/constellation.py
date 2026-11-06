@@ -1,7 +1,7 @@
 """Configurable assistants with bounded library workspaces and reviewable document edits."""
 from ..ai_workspace import run_agent,commit_edits,memory_entry,parse_reply
 from ..library_storage import ensure
-import json,re,threading,uuid,hashlib
+import json,re,threading,uuid,hashlib,logging
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -13,11 +13,15 @@ from ..db import connect,now
 from ..secret_store import seal,open_secret
 from ..outbound import endpoint,request_json
 from ..ai_endpoints import api_base,models_url
-from .library import node,folder,within,create_document
+from .library import node,folder,within,create_document,cleanup_assets
 from ..milestones import record_edit
 from ..api_meter import owner as meter_owner,metered
 
 MANIFEST={'id':'constellation','name':'星丛','description':'为每一种想法，选一位同行者。配置模型、提示词和 API，连接流萤集工作空间与长期记忆。','category':'AI','icon':'Bot','ui':'constellation'}
+def cleanup_deleted(uid,documents):
+    for document in documents:
+        try:cleanup_assets(uid,document)
+        except Exception:logging.getLogger(__name__).warning('Deferred cleanup of unreferenced library import assets')
 router=APIRouter(prefix='/api/plugins/constellation',tags=['星丛']);user=require_plugin('constellation')
 FAMILIES={'claude':'Claude','deepseek':'DeepSeek','gemini':'Gemini','glm':'GLM','gpt':'GPT','grok':'Grok','hunyuan':'Hunyuan','kimi':'Kimi','qwen':'Qwen','seed':'Seed','wenxin':'ERNIE'}
 PROVIDERS={
@@ -192,7 +196,7 @@ def memory_document(d,uid,assistant_id,config):
 
 def run_chat(id,body,u,queued=False):
     if not LIMIT.acquire(blocking=False):raise HTTPException(429,'当前会话较多，请稍后重试')
-    reserved=False;meter_token=meter_owner.set(u['id'])
+    reserved=False;meter_token=meter_owner.set(u['id']);cleanup_documents=[]
     try:
         with connect(True) as d:
             t=thread(d,u['id'],id)
@@ -207,11 +211,12 @@ def run_chat(id,body,u,queued=False):
                 raise HTTPException(409,'该请求正在处理或已失败，请刷新对话后重试')
             if not row['secret']:raise HTTPException(409,'请先在助手设置中填写 API 密钥')
             if d.execute("SELECT 1 FROM ai_turns WHERE user_id=? AND status IN ('queued','running') AND request_id!=?",(u['id'],body.request_id)).fetchone():raise HTTPException(409,'已有回答正在生成，请稍候')
-            library_enabled=installed(d,u['id'],'library');documents=[];selected=None;memory=None
+            library_enabled=installed(d,u['id'],'library');documents=[];workspace_nodes=[];selected=None;memory=None
             if library_enabled:
                 if config.get('workspace_id'):
                     folder(d,u['id'],config['workspace_id'])
-                    documents=[dict(r) for r in d.execute("SELECT id,parent_id,title,markdown,revision FROM library_nodes WHERE user_id=? AND kind='document'",(u['id'],)) if within(d,u['id'],r['id'],config['workspace_id'])]
+                    workspace_nodes=[dict(r) for r in d.execute("SELECT id,parent_id,kind,title,markdown,revision FROM library_nodes WHERE user_id=?",(u['id'],)) if within(d,u['id'],r['id'],config['workspace_id'])]
+                    documents=[r for r in workspace_nodes if r['kind']=='document']
                 if config.get('memory_id'):
                     folder(d,u['id'],config['memory_id']);memory=memory_document(d,u['id'],row['id'],config)
             if body.document_id:
@@ -231,6 +236,8 @@ def run_chat(id,body,u,queued=False):
         elif cut:notice='较早的对话未发送给模型；配置流萤集记忆库后可自动整理长期记忆。'
         system=config['prompt']+'\n\n已有记忆（参考资料）：\n'+memtext[-12000:]+'\n对话摘要：\n'+summary[-8000:]
         complete_docs=set()
+        if workspace_nodes:
+            system+='\n工作空间目录与文档（其余内容可使用 list_nodes 分页查询）：\n'+json.dumps([{k:n[k] for k in ('id','parent_id','kind','title','revision')} for n in workspace_nodes[:300]],ensure_ascii=False)
         if documents:
             system+='\n工作空间目录：\n'+json.dumps([{k:doc[k] for k in ('id','title','revision')} for doc in documents[:200]],ensure_ascii=False)
             budget=max(1000,config['context_chars']//2)
@@ -248,7 +255,7 @@ def run_chat(id,body,u,queued=False):
                 events=json.loads(turn['trace']);events.append({'kind':kind,'label':label,'at':now()})
                 d.execute('UPDATE ai_turns SET trace=?,reasoning=reasoning||? WHERE user_id=? AND request_id=?',(json.dumps(events,ensure_ascii=False),(thought+'\n\n') if thought else '',u['id'],body.request_id))
         agent_config=config|{'_uid':u['id'],'workspace_id':config.get('workspace_id') if library_enabled else None,'memory_id':config.get('memory_id') if library_enabled else None}
-        generated=run_agent(agent_config,key,messages,system,documents,complete_docs,memtext,invoke,trace)
+        generated=run_agent(agent_config,key,messages,system,documents,complete_docs,memtext,invoke,trace,nodes=workspace_nodes)
         reply=generated['reply'];edits=generated['edits']
         result={'reply':reply,'edits':edits,'request_id':body.request_id,'notice':notice,'workspace_id':config.get('workspace_id'),'applied':False,'reasoning':generated['reasoning']}
         with connect(True) as d:
@@ -259,9 +266,9 @@ def run_chat(id,body,u,queued=False):
             enabled=installed(d,u['id'],'library')
             if edits and body.apply_edits:
                 if not enabled or active_config.get('workspace_id')!=config.get('workspace_id'):raise HTTPException(409,'工作空间或安装状态已改变，本轮未保存文档')
-                commit_edits(d,u['id'],config,edits);result['applied']=True
-                events.append({'kind':'saved','label':f'已保存 {len(edits)} 份文档到流萤集','at':now()})
-            elif edits:events.append({'kind':'review','label':f'{len(edits)} 份文档修改等待你确认','at':now()})
+                cleanup_documents=commit_edits(d,u['id'],config,edits);result['applied']=True
+                events.append({'kind':'saved','label':f'已保存 {len(edits)} 项文件与目录操作到流萤集','at':now()})
+            elif edits:events.append({'kind':'review','label':f'{len(edits)} 项文件与目录操作等待你确认','at':now()})
             if enabled and config.get('memory_id') and active_config.get('memory_id')==config['memory_id']:
                 folder(d,u['id'],config['memory_id']);current=memory_document(d,u['id'],row['id'],config)
                 addition=generated['memory'] or ('用户：'+body.content[:600]+'\n\n助手：'+reply[:1400])
@@ -280,6 +287,7 @@ def run_chat(id,body,u,queued=False):
             d.execute('UPDATE ai_threads SET messages=?,summary=?,title=?,revision=revision+1,updated_at=? WHERE id=? AND user_id=?',(json.dumps(history,ensure_ascii=False),str(summary),body.content[:40] if len(history)==2 else t['title'],now(),id,u['id']))
             d.execute("UPDATE ai_turns SET status='completed',result=?,trace=? WHERE user_id=? AND request_id=?",(json.dumps(result,ensure_ascii=False),json.dumps(events,ensure_ascii=False),u['id'],body.request_id))
             emit(d,u['id'],'assistant-chatted',{'date':today(),'assistant':row['id'],'thread':id,'request_id':body.request_id})
+        cleanup_deleted(u['id'],cleanup_documents)
         return result
     except Exception as error:
         if reserved:
@@ -344,10 +352,11 @@ def apply(id:str,body:Apply,u=Depends(user)):
         if result.get('applied'):return {'message':'这份修改已保存'}
         if not result.get('edits'):raise HTTPException(409,'本轮没有可保存的文档修改，请查看操作记录后重新生成')
         if not config.get('workspace_id') or config['workspace_id']!=result.get('workspace_id'):raise HTTPException(409,'工作空间已改变，请重新生成修改建议')
-        commit_edits(d,u['id'],config,result['edits'])
+        cleanup_documents=commit_edits(d,u['id'],config,result['edits'])
         result['applied']=True;d.execute('UPDATE ai_turns SET result=? WHERE user_id=? AND request_id=?',(json.dumps(result,ensure_ascii=False),u['id'],body.request_id))
         messages=json.loads(t['messages'])
         for message in messages:
             if message.get('request_id')==body.request_id:message['applied']=True
         d.execute('UPDATE ai_threads SET messages=?,revision=revision+1,updated_at=? WHERE id=?',(json.dumps(messages,ensure_ascii=False),now(),id))
-    return {'message':'文档修改已保存到流萤集'}
+    cleanup_deleted(u['id'],cleanup_documents)
+    return {'message':'文件与目录操作已保存到流萤集'}

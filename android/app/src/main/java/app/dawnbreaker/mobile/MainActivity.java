@@ -12,6 +12,7 @@ import android.widget.Toast;
 
 public class MainActivity extends BridgeActivity {
     boolean atlasFullscreen=false;
+    boolean companionFullscreen=false;
     private int atlasPreviousOrientation=android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     void setAtlasMode(boolean active){
         if(active&&!atlasFullscreen){atlasPreviousOrientation=getRequestedOrientation();atlasFullscreen=true;setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);}
@@ -35,7 +36,8 @@ public class MainActivity extends BridgeActivity {
         if (bridge == null) return;
         getOnBackPressedDispatcher().addCallback(this,new androidx.activity.OnBackPressedCallback(true){
             @Override public void handleOnBackPressed(){
-                if(atlasFullscreen){setAtlasMode(false);bridge.triggerJSEvent("dawn:exit-atlas","window");}
+                if(companionFullscreen){companionFullscreen=false;bridge.triggerJSEvent("dawn:exit-companion","window");}
+                else if(atlasFullscreen){setAtlasMode(false);bridge.triggerJSEvent("dawn:exit-atlas","window");}
                 else{setEnabled(false);getOnBackPressedDispatcher().onBackPressed();setEnabled(true);}
             }
         });

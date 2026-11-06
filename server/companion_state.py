@@ -23,6 +23,7 @@ def schema(d):
     ''')
     if 'sources' not in {r[1] for r in d.execute('PRAGMA table_info(companion_messages)')}:d.execute("ALTER TABLE companion_messages ADD COLUMN sources TEXT NOT NULL DEFAULT '[]'")
     if 'hidden_at' not in {r[1] for r in d.execute('PRAGMA table_info(companion_messages)')}:d.execute('ALTER TABLE companion_messages ADD COLUMN hidden_at TEXT')
+    if 'quote' not in {r[1] for r in d.execute('PRAGMA table_info(companion_messages)')}:d.execute('ALTER TABLE companion_messages ADD COLUMN quote TEXT')
     if 'message_revision' not in {r[1] for r in d.execute('PRAGMA table_info(companions)')}:d.execute('ALTER TABLE companions ADD COLUMN message_revision INTEGER NOT NULL DEFAULT 0')
     d.execute('CREATE TABLE IF NOT EXISTS companion_message_hides(user_id TEXT NOT NULL REFERENCES users(id),companion_id TEXT NOT NULL,request_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(user_id,companion_id,request_id))')
 

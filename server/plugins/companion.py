@@ -11,6 +11,7 @@ from ..secret_store import seal,open_secret
 from ..outbound import endpoint,request_json
 from ..ai_endpoints import api_base,models_url
 from ..companion_config import settings,profile
+from ..companion_reply import display_text
 from ..companion_state import owned,emotion,mood_label,memory_strength,prune
 
 MANIFEST={'id':'companion','name':'拾光者','description':'与 Grok、DeepSeek 自然聊天。短句聊天、情绪变化、渐进记忆与偶尔主动的问候。','category':'聊天','icon':'MessagesSquare','ui':'companion'}
@@ -40,6 +41,7 @@ def public(d,row):
     active=d.execute("SELECT id,status,kind,error,result FROM companion_turns WHERE user_id=? AND companion_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",(row['user_id'],row['id'])).fetchone()
     last=dict(last) if last else None
     if last:
+        if last['role']=='assistant':last['text']=display_text(last['text'])
         tokens=json.loads(last.pop('media'));kind=d.execute('SELECT kind FROM companion_media WHERE id=? AND user_id=?',(tokens[0],row['user_id'])).fetchone() if tokens else None
         if kind and (kind[0]=='audio' or not last['text']):last['text']={'audio':'[语音]','image':'[图片]','video':'[视频]'}.get(kind[0],'[附件]')
     active=dict(active) if active else None
@@ -158,7 +160,7 @@ def message_public(d,r,uid,id):
     for token in json.loads(r['media']):
         try:attachments.append(media.public(media.owned(d,uid,token,id)))
         except HTTPException:pass
-    return {'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else r['text'],'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id'],'request_id':r['request_id'],'turn_status':r['turn_status'],'turn_error':r['turn_error']}
+    return {'id':r['id'],'role':r['role'],'text':'' if r['role']=='assistant' and r['text'] in ('AI 生成的图像','AI 生成的视频','AI 生成的语音') else display_text(r['text']) if r['role']=='assistant' else r['text'],'quote':json.loads(r['quote']) if r['quote'] else None,'sources':json.loads(r['sources']),'media':attachments,'created_at':r['created_at'],'proactive':bool(r['proactive']),'turn_id':r['turn_id'],'request_id':r['request_id'],'turn_status':r['turn_status'],'turn_error':r['turn_error']}
 
 MESSAGE_SELECT="SELECT m.*,t.request_id,t.status AS turn_status,t.error AS turn_error FROM companion_messages m LEFT JOIN companion_turns t ON t.id=m.turn_id AND t.user_id=m.user_id"
 VISIBLE="m.user_id=? AND m.companion_id=? AND m.hidden_at IS NULL AND m.visible_at<=?"
@@ -187,7 +189,8 @@ def search_messages(id:str,q:str=Query(min_length=1,max_length=200),before:int=Q
     if not q.strip():raise HTTPException(422,'请输入搜索内容')
     with db.connect() as d:
         owned(d,u['id'],id)
-        rows=d.execute(MESSAGE_SELECT+' WHERE '+VISIBLE+' AND instr(lower(m.text),lower(?))>0 AND (?=0 OR m.id<?) ORDER BY m.id DESC LIMIT 51',(u['id'],id,time.time(),q.strip(),before,before)).fetchall()
+        d.create_function('chat_display_text',1,display_text)
+        rows=d.execute(MESSAGE_SELECT+' WHERE '+VISIBLE+" AND instr(lower(CASE WHEN m.role='assistant' THEN chat_display_text(m.text) ELSE m.text END),lower(?))>0 AND (?=0 OR m.id<?) ORDER BY m.id DESC LIMIT 51",(u['id'],id,time.time(),q.strip(),before,before)).fetchall()
         return {'messages':[message_public(d,r,u['id'],id) for r in rows[:50]],'has_more':len(rows)>50}
 
 def hide_message(d,uid,id,mid):
@@ -226,11 +229,12 @@ class Send(BaseModel):
     media_ids:list[str]=Field(default_factory=list,max_length=4)
     kind:Literal['chat','image','video','voice']='chat'
     source_message_id:int|None=None
+    reply_to_id:int|None=Field(default=None,ge=1)
 
 @router.post('/{id}/send',status_code=202)
 def send(id:str,body:Send,u=Depends(user)):
     from ..companion_jobs import submit
-    return submit(u['id'],id,body.model_dump())
+    return submit(u['id'],id,body.model_dump(exclude={'reply_to_id'} if body.reply_to_id is None else set()))
 
 @router.post('/turns/{turn_id}/retry',status_code=202)
 def retry(turn_id:str,u=Depends(user)):
