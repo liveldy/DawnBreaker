@@ -37,7 +37,7 @@ public class NativeBridgeTest {
             PluginHandle plugin=activity.getBridge().getPlugin("DawnClient");
             assertNotNull("DawnClient must exist before the JS plugin list is exported",plugin);
             String javascript=JSExport.getPluginJS(Collections.singletonList(plugin));
-            for(String method:new String[]{"getInfo","checkUpdate","downloadUpdate","installUpdate","setAtlasMode"}) {
+            for(String method:new String[]{"getInfo","checkUpdate","downloadUpdate","installUpdate","setAtlasMode","savePhoto","saveText"}) {
                 assertTrue("Missing exported method: "+method,javascript.contains(method));
             }
             int original=activity.getRequestedOrientation();activity.setAtlasMode(true);
