@@ -41,7 +41,7 @@ async def lifespan(app):
     try:yield
     finally:companion_stop.set()
 
-app=FastAPI(title='破晓 DawnBreaker',version='1.4.4',lifespan=lifespan)
+app=FastAPI(title='破晓 DawnBreaker',version='1.4.5',lifespan=lifespan)
 
 @app.middleware('http')
 async def protection(request:Request,call_next):
@@ -51,7 +51,7 @@ async def protection(request:Request,call_next):
             return JSONResponse({'detail':'请求来源不匹配'},status_code=403)
         size=request.headers.get('content-length','0')
         path=request.url.path
-        max_body=101*1024*1024 if path=='/api/plugins/wallpaper' else 1100000 if path=='/api/plugins/warp' else 12*1024*1024 if path=='/api/plugins/library/images' else 32*1024*1024 if path=='/api/plugins/library/imports' or path.startswith('/api/plugins/companion/') and path.endswith('/upload') else 6*1024*1024 if path=='/api/profile/avatar' or path.startswith('/api/plugins/companion/') and path.endswith('/avatar') else 3*1024*1024 if path.startswith(('/api/plugins/library/nodes','/api/plugins/vault')) else 262144 if path.startswith(('/api/admin/','/api/plugins/constellation/','/api/plugins/companion/','/api/plugins/music/sync','/api/plugins/checkin/notes')) else 16384
+        max_body=46*1024*1024 if path=='/api/plugins/vault' else 101*1024*1024 if path=='/api/plugins/wallpaper' else 1100000 if path=='/api/plugins/warp' else 12*1024*1024 if path=='/api/plugins/library/images' else 32*1024*1024 if path=='/api/plugins/library/imports' or path.startswith('/api/plugins/companion/') and path.endswith('/upload') else 6*1024*1024 if path=='/api/profile/avatar' or path.startswith('/api/plugins/companion/') and path.endswith('/avatar') else 3*1024*1024 if path.startswith('/api/plugins/library/nodes') else 262144 if path.startswith(('/api/admin/','/api/plugins/constellation/','/api/plugins/companion/','/api/plugins/music/sync','/api/plugins/checkin/notes')) else 16384
         if not size.isdigit() or int(size)>max_body:
             return JSONResponse({'detail':'请求内容过大'},status_code=413)
     response=await call_next(request)
@@ -123,7 +123,7 @@ def logout(request:Request,response:Response):
 @app.get('/api/bootstrap')
 def bootstrap(u=Depends(require_user)):
     with db.connect() as conn:
-        return {'user':public_user(u),'wallet':{k:balance(conn,u['id'],k) for k in ['essence','stones']},'plugins':[p for p in catalog(conn,u['id']) if p['installed']],'version':'1.4.4'}
+        return {'user':public_user(u),'wallet':{k:balance(conn,u['id'],k) for k in ['essence','stones']},'plugins':[p for p in catalog(conn,u['id']) if p['installed']],'version':'1.4.5'}
 
 class Profile(BaseModel):
     nickname:str=Field(min_length=1,max_length=30)
@@ -188,7 +188,7 @@ def wallet(page:int=Query(1,ge=1),u=Depends(require_user)):
 @app.get('/api/health')
 def health():
     with db.connect() as conn: conn.execute('SELECT 1').fetchone()
-    return {'status':'ok','service':'DawnBreaker','version':'1.4.4'}
+    return {'status':'ok','service':'DawnBreaker','version':'1.4.5'}
 
 for module in MODULES: app.include_router(module.router)
 from .admin import router as admin_router

@@ -34,12 +34,21 @@ public class DawnClientPlugin extends Plugin {
 
     @PluginMethod public void saveText(PluginCall call){
         String filename=call.getString("filename","破晓导出.txt").replaceAll("[\\\\/:\\r\\n]","_");String mime=call.getString("mime","text/plain");String content=call.getString("content","");
-        if(filename.length()>150||content.getBytes(StandardCharsets.UTF_8).length>8*1024*1024||!java.util.Arrays.asList("text/plain","text/markdown","text/csv","application/json").contains(mime)){call.reject("导出文件格式或大小无效");return;}
+        if(filename.length()>150||content.getBytes(StandardCharsets.UTF_8).length>48*1024*1024||!java.util.Arrays.asList("text/plain","text/markdown","text/csv","application/json").contains(mime)){call.reject("导出文件格式或大小无效");return;}
         Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(mime);intent.putExtra(Intent.EXTRA_TITLE,filename);startActivityForResult(call,intent,"saveTextResult");
     }
     @ActivityCallback private void saveTextResult(PluginCall call,ActivityResult result){
         if(call==null)return;if(result.getResultCode()!=Activity.RESULT_OK||result.getData()==null||result.getData().getData()==null){call.resolve(new JSObject().put("cancelled",true));return;}
         try(OutputStream out=getContext().getContentResolver().openOutputStream(result.getData().getData())){if(out==null)throw new IOException();out.write(call.getString("content","").getBytes(StandardCharsets.UTF_8));call.resolve(new JSObject().put("saved",true));}catch(Exception e){call.reject("文件暂时无法保存，请重试");}
+    }
+    @PluginMethod public void savePhoto(PluginCall call){
+        String filename=call.getString("filename","暗格照片.png").replaceAll("[\\\\/:\\r\\n]","_");String mime=call.getString("mime","");String data=call.getString("data","");
+        try{if(filename.length()>150||data.length()>7*1024*1024||!Arrays.asList("image/png","image/jpeg","image/webp").contains(mime))throw new IOException();byte[] bytes=Base64.decode(data,Base64.NO_WRAP);if(bytes.length==0||bytes.length>5*1024*1024)throw new IOException();}catch(Exception e){call.reject("照片格式或大小无效");return;}
+        Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(mime);intent.putExtra(Intent.EXTRA_TITLE,filename);startActivityForResult(call,intent,"savePhotoResult");
+    }
+    @ActivityCallback private void savePhotoResult(PluginCall call,ActivityResult result){
+        if(call==null)return;if(result.getResultCode()!=Activity.RESULT_OK||result.getData()==null||result.getData().getData()==null){call.resolve(new JSObject().put("cancelled",true));return;}
+        executor.execute(()->{try(OutputStream out=getContext().getContentResolver().openOutputStream(result.getData().getData())){if(out==null)throw new IOException();out.write(Base64.decode(call.getString("data",""),Base64.NO_WRAP));call.resolve(new JSObject().put("saved",true));}catch(Exception e){call.reject("照片暂时无法保存，请重试");}});
     }
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private volatile JSONObject release;

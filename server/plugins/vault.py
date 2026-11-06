@@ -10,7 +10,8 @@ class Envelope(BaseModel):
     version:int=Field(ge=0)
     salt:str=Field(max_length=64)
     nonce:str=Field(max_length=64)
-    ciphertext:str=Field(max_length=2000000)
+    ciphertext:str=Field(max_length=45*1024*1024)
+    format_version:int=Field(default=2,ge=1,le=3)
     iterations:int=Field(ge=600000,le=600000)
     algorithm:str=Field(pattern='^PBKDF2-SHA256/AES-256-GCM$')
 @router.get('')
@@ -24,7 +25,8 @@ def save(body:Envelope,u=Depends(user)):
         if len(salt)!=16 or len(iv)!=12 or len(data)<16:raise ValueError()
     except Exception:raise HTTPException(422,'加密数据格式无效')
     with connect(True) as d:
-        current=d.execute('SELECT version FROM vaults WHERE user_id=?',(u['id'],)).fetchone()
+        current=d.execute('SELECT version,envelope FROM vaults WHERE user_id=?',(u['id'],)).fetchone()
+        if current and json.loads(current['envelope']).get('format_version',2)>body.format_version:raise HTTPException(409,'密码箱已包含照片等新版资料，请更新客户端后再编辑')
         if (current['version'] if current else 0)!=body.version:raise HTTPException(409,'密码箱已被其他设备更新，请锁定后重新解锁再编辑')
         version=body.version+1
         d.execute('INSERT INTO vaults VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET version=excluded.version,envelope=excluded.envelope,updated_at=excluded.updated_at',(u['id'],version,json.dumps(body.model_dump(exclude={'version'})),now()))
