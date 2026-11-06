@@ -5,8 +5,8 @@ from .db import connect
 from .outbound import request_json
 owner=ContextVar('api_meter_owner',default=None)
 def fingerprint(key):return hashlib.sha256(key.encode()).hexdigest()
-def metered(uid,base,key,model,url,body,headers):
-    data=request_json(url,body,headers)
+def metered(uid,base,key,model,url,body,headers,allow_http=False):
+    data=request_json(url,body,headers,**({'allow_http':True} if allow_http else {}))
     usage=data.get('usage',data.get('usageMetadata',{})) or {}
     tokens=usage.get('total_tokens',usage.get('totalTokenCount'))
     if tokens is None and 'input_tokens' in usage and 'output_tokens' in usage:tokens=usage['input_tokens']+usage['output_tokens']

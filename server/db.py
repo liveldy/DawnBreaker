@@ -74,7 +74,7 @@ def init():
         CREATE INDEX IF NOT EXISTS practice_sessions_owner ON practice_sessions(user_id,started_at);
         CREATE TABLE IF NOT EXISTS wallpapers(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),title TEXT NOT NULL,manifest TEXT NOT NULL,filename TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
         ''')
-        for column,sql in [('provider_id',"TEXT NOT NULL DEFAULT 'custom'"),('billing_secret',"TEXT NOT NULL DEFAULT ''")]:
+        for column,sql in [('provider_id',"TEXT NOT NULL DEFAULT 'custom'"),('billing_secret',"TEXT NOT NULL DEFAULT ''"),('management_id',"TEXT NOT NULL DEFAULT ''")]:
             if column not in {r[1] for r in db.execute('PRAGMA table_info(api_monitors)')}:
                 db.execute('ALTER TABLE api_monitors ADD COLUMN '+column+' '+sql)
         if 'role' not in {r[1] for r in db.execute('PRAGMA table_info(users)')}:
@@ -87,6 +87,15 @@ def init():
         CREATE INDEX IF NOT EXISTS library_images_owner ON library_images(user_id);
         CREATE TABLE IF NOT EXISTS checkin_notes(user_id TEXT NOT NULL REFERENCES users(id),day TEXT NOT NULL,content TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,day));
         CREATE TABLE IF NOT EXISTS quote_history(user_id TEXT NOT NULL REFERENCES users(id),day TEXT NOT NULL,quote_id TEXT NOT NULL,snapshot TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,day));
+        ''')
+        image_columns={r[1] for r in db.execute('PRAGMA table_info(library_images)')}
+        for column,kind in [('ref','INTEGER'),('source_job_id','TEXT'),('source_asset','TEXT'),('name',"TEXT NOT NULL DEFAULT ''")]:
+            if column not in image_columns:db.execute('ALTER TABLE library_images ADD COLUMN '+column+' '+kind)
+        db.executescript('''
+        CREATE UNIQUE INDEX IF NOT EXISTS library_images_ref ON library_images(user_id,ref);
+        CREATE UNIQUE INDEX IF NOT EXISTS library_images_source ON library_images(user_id,source_job_id,source_asset);
+        CREATE TABLE IF NOT EXISTS library_image_sequences(user_id TEXT PRIMARY KEY,next_ref INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS library_indexed_imports(job_id TEXT PRIMARY KEY,user_id TEXT NOT NULL);
         ''')
         # Retired currencies are removed, with no conversion or archive.
         from .companion_state import schema as companion_schema

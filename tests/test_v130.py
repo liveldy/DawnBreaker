@@ -136,12 +136,14 @@ def test_offline_listening_retry_overlap_and_midnight(client):
         assert any(e['date']=='2026-11-03' and e['seconds']==10 for e in events)
 
 def test_atlas_fresh_cache_and_truthful_stale(client,monkeypatch,tmp_path):
-    register(client);install(client,'atlas');monkeypatch.setattr(atlas,'CACHE',tmp_path/'live.json');monkeypatch.setattr(atlas,'last_attempt',0)
+    register(client);install(client,'atlas');monkeypatch.setattr(atlas,'CACHE',tmp_path/'live.json')
     def source(i):return [{'model_id':'one'}] if i==1 else {'general':{'models':[{'model_id':'one','conservative':10}]}} if i==0 else {'data':[]}
     monkeypatch.setattr(atlas,'fetch_source',source)
-    first=client.get('/api/plugins/atlas/live').json();assert not first['stale'] and len(first['metadata'])==1
-    monkeypatch.setattr(atlas,'last_attempt',0)
-    monkeypatch.setattr(atlas,'fetch_source',lambda _:(_ for _ in ()).throw(OSError()))
-    assert client.get('/api/plugins/atlas/live?refresh=true').json()['stale']
-    assert client.get('/api/plugins/atlas/live').json()['stale']
+    assert client.get('/api/plugins/atlas/live').status_code==503
+    assert atlas.update_daily()
+    first=client.get('/api/plugins/atlas/live');assert not first.json()['stale'] and len(first.json()['metadata'])==1
+    monkeypatch.setattr(atlas,'fetch_source',lambda _:pytest.fail('User refresh must not fetch upstream'))
+    assert not client.get('/api/plugins/atlas/live?refresh=true').json()['stale']
+    conditional=client.get('/api/plugins/atlas/live',headers={'If-None-Match':first.headers['etag']});assert conditional.status_code==304
+    assert conditional.headers['cache-control']=='private, max-age=60'
     assert client.get('/api/plugins/atlas/view').headers['x-frame-options']=='SAMEORIGIN'

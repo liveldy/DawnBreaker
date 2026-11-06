@@ -20,7 +20,7 @@ def usage(d,uid):
     row=d.execute('SELECT library_quota_bytes FROM users WHERE id=?',(uid,)).fetchone()
     if not row:raise HTTPException(404,'账号不存在')
     documents=d.execute('SELECT COALESCE(SUM(length(CAST(title AS BLOB))+length(CAST(markdown AS BLOB))),0) FROM library_nodes WHERE user_id=?',(uid,)).fetchone()[0]
-    images=d.execute('SELECT COALESCE(SUM(size),0) FROM library_images WHERE user_id=?',(uid,)).fetchone()[0]
+    images=d.execute('SELECT COALESCE(SUM(size),0) FROM library_images WHERE user_id=? AND source_job_id IS NULL',(uid,)).fetchone()[0]
     imports=disk_bytes(DATA/'library-imports'/uid)
     used=documents+images+imports;quota=row[0]
     return {'used_bytes':used,'quota_bytes':quota,'available_bytes':max(0,quota-used),'documents_bytes':documents,'images_bytes':images,'imports_bytes':imports}

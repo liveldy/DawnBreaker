@@ -12,6 +12,7 @@ from ..core import require_plugin
 from ..db import connect,now,DATA
 from ..milestones import record_edit
 from ..library_storage import usage,ensure,text_bytes,IMAGES
+from .. import library_images as image_index
 from PIL import Image,ImageOps,UnidentifiedImageError
 
 MANIFEST={'id':'library','name':'流萤集','description':'把书籍和文档收进自己的书架。Markdown 与 LaTeX 编辑、公式预览，免费本地 OCR 导入。','category':'阅读与创作','icon':'BookOpen','ui':'library'}
@@ -122,10 +123,10 @@ def cleanup_assets(uid,document):
             job=d.execute('SELECT * FROM import_jobs WHERE id=? AND user_id=?',(id,uid)).fetchone()
             if not job or job['status'] in ('queued','running') or job['document_id'] and d.execute('SELECT 1 FROM library_nodes WHERE id=? AND user_id=?',(job['document_id'],uid)).fetchone():continue
             prefix='/api/plugins/library/imports/'+id+'/assets/'
-            if d.execute('SELECT 1 FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(uid,prefix)).fetchone():continue
+            if image_index.job_referenced(d,uid,id):continue
             work=job_path(uid,id)
             if work.is_dir():
-                try:shutil.rmtree(work)
+                try:shutil.rmtree(work);d.execute('DELETE FROM library_images WHERE user_id=? AND source_job_id=?',(uid,id))
                 except OSError:pass
 def run_import(uid,id):
     with connect(True) as d:
@@ -144,6 +145,7 @@ def run_import(uid,id):
         if len(content)>1000000:raise RuntimeError('识别内容过长，请拆分书籍后重试。')
         output.unlink(missing_ok=True)
         with connect(True) as d:
+            content=image_index.shorten(content,image_index.index_import(d,uid,dict(job)))
             ensure(d,uid,len(content.encode('utf8')))
             doc=create_document(d,uid,job['parent_id'],job['title'],content,id)
             d.execute("UPDATE import_jobs SET status='completed',document_id=?,error=?,updated_at=? WHERE id=?",(doc['id'],warning,now(),id))
@@ -199,8 +201,10 @@ def remove_import(id:str,u=Depends(user)):
         d.execute('UPDATE import_jobs SET deleted=1 WHERE id=?',(id,))
         work=job_path(u['id'],id)
         if work.is_dir():
-            references=d.execute('SELECT 1 FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(u['id'],'/api/plugins/library/imports/'+id+'/assets/')).fetchone()
-            if not job['document_id'] and not references:shutil.rmtree(work)
+            references=image_index.job_referenced(d,u['id'],id)
+            if not job['document_id'] and not references:
+                shutil.rmtree(work)
+                d.execute('DELETE FROM library_images WHERE user_id=? AND source_job_id=?',(u['id'],id))
             elif job['filename']:(work/job['filename']).unlink(missing_ok=True)
     return {'message':'导入记录已删除，文档及其图片保留'}
 @router.get('/imports/{id}/assets/{asset:path}')
@@ -226,27 +230,42 @@ async def upload_image(file:UploadFile=File(...),u=Depends(user)):
     if not IMAGE_LIMIT.acquire(False):raise HTTPException(429,'图片处理繁忙，请稍后重试')
     try:data=await run_in_threadpool(prepare_image,data)
     finally:IMAGE_LIMIT.release()
-    id=uuid.uuid4().hex;filename=id+'.webp';directory=IMAGES/u['id'];directory.mkdir(exist_ok=True)
+    id=uuid.uuid4().hex;filename=id+'.webp';directory=IMAGES/u['id'];directory.mkdir(parents=True,exist_ok=True)
     path=directory/filename
     try:
         with connect(True) as d:
             ensure(d,u['id'],len(data));path.write_bytes(data)
-            d.execute('INSERT INTO library_images VALUES(?,?,?,?,?,?,?)',(id,u['id'],filename,'image/webp',len(data),hashlib.sha256(data).hexdigest(),now()))
+            ref=image_index.next_ref(d,u['id'])
+            d.execute('INSERT INTO library_images(id,user_id,filename,mime,size,sha256,created_at,ref,name) VALUES(?,?,?,?,?,?,?,?,?)',(id,u['id'],filename,'image/webp',len(data),hashlib.sha256(data).hexdigest(),now(),ref,(file.filename or '图片')[:200]))
     except Exception:path.unlink(missing_ok=True);raise
-    return {'id':id,'url':'/api/plugins/library/images/'+id,'size':len(data),'name':(file.filename or '图片')[:200]}
+    return {'id':id,'url':'/api/plugins/library/images/'+id,'reference':'img/'+str(ref),'size':len(data),'name':(file.filename or '图片')[:200]}
 
 @router.get('/images')
 def images(u=Depends(user)):
-    with connect() as d:
-        rows=[dict(r) for r in d.execute('SELECT id,size,created_at FROM library_images WHERE user_id=? ORDER BY created_at DESC',(u['id'],))]
-        for row in rows:row['url']='/api/plugins/library/images/'+row['id'];row['references']=d.execute('SELECT COUNT(*) FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(u['id'],row['url'])).fetchone()[0]
+    with connect(True) as d:
+        image_index.backfill(d,u['id'])
+        rows=[dict(r) for r in d.execute('SELECT * FROM library_images WHERE user_id=? ORDER BY ref DESC',(u['id'],))]
+        for row in rows:
+            row['url']='/api/plugins/library/images/'+row['id'];row['reference']='img/'+str(row['ref']);row['references']=image_index.references(d,u['id'],row);row['source']='import' if row['source_job_id'] else 'upload'
+            for field in ('filename','source_asset','sha256','user_id'):row.pop(field,None)
         return {'images':rows,'storage':usage(d,u['id'])}
+
+@router.get('/images/ref/{ref}')
+def image_ref(ref:int,u=Depends(user)):
+    with connect(True) as d:
+        image_index.backfill(d,u['id']);row=d.execute('SELECT * FROM library_images WHERE user_id=? AND ref=?',(u['id'],ref)).fetchone()
+    if not row:raise HTTPException(404,'图片不存在')
+    path=image_index.physical(dict(row))
+    if not path.is_file():raise HTTPException(404,'图片不存在')
+    return FileResponse(path,media_type=row['mime'])
 
 @router.get('/images/{id}')
 def image(id:str,u=Depends(user)):
     with connect() as d:row=d.execute('SELECT * FROM library_images WHERE id=? AND user_id=?',(id,u['id'])).fetchone()
     if not row:raise HTTPException(404,'图片不存在')
-    return FileResponse(IMAGES/u['id']/row['filename'],media_type='image/webp')
+    path=image_index.physical(dict(row))
+    if not path.is_file():raise HTTPException(404,'图片不存在')
+    return FileResponse(path,media_type=row['mime'])
 
 @router.delete('/images/{id}')
 def delete_image(id:str,u=Depends(user)):
@@ -254,7 +273,7 @@ def delete_image(id:str,u=Depends(user)):
         row=d.execute('SELECT * FROM library_images WHERE id=? AND user_id=?',(id,u['id'])).fetchone()
         if not row:raise HTTPException(404,'图片不存在')
         url='/api/plugins/library/images/'+id
-        if d.execute('SELECT 1 FROM library_nodes WHERE user_id=? AND instr(markdown,?)>0',(u['id'],url)).fetchone():raise HTTPException(409,'图片仍被文档引用，请先在文档中移除图片')
+        if image_index.references(d,u['id'],dict(row)):raise HTTPException(409,'图片仍被文档引用，请先在文档中移除图片')
         d.execute('DELETE FROM library_images WHERE id=? AND user_id=?',(id,u['id']))
-    (IMAGES/u['id']/row['filename']).unlink(missing_ok=True)
+    image_index.physical(dict(row)).unlink(missing_ok=True)
     return {'message':'图片已删除，空间已释放'}

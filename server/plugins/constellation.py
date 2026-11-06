@@ -23,7 +23,7 @@ def cleanup_deleted(uid,documents):
         try:cleanup_assets(uid,document)
         except Exception:logging.getLogger(__name__).warning('Deferred cleanup of unreferenced library import assets')
 router=APIRouter(prefix='/api/plugins/constellation',tags=['星丛']);user=require_plugin('constellation')
-FAMILIES={'claude':'Claude','deepseek':'DeepSeek','gemini':'Gemini','glm':'GLM','gpt':'GPT','grok':'Grok','hunyuan':'Hunyuan','kimi':'Kimi','qwen':'Qwen','seed':'Seed','wenxin':'ERNIE'}
+FAMILIES={'claude':'Claude','deepseek':'DeepSeek','gemini':'Gemini','glm':'GLM','gpt':'GPT','grok':'Grok','hunyuan':'Hunyuan','kimi':'Kimi','qwen':'Qwen','seed':'Seed','wenxin':'ERNIE','custom':'自定义'}
 PROVIDERS={
  'claude':('https://api.anthropic.com/v1','anthropic'), 'deepseek':('https://api.deepseek.com/v1','openai'),
  'gemini':('https://generativelanguage.googleapis.com/v1beta','gemini'), 'glm':('https://open.bigmodel.cn/api/paas/v4','openai'),
@@ -31,6 +31,7 @@ PROVIDERS={
  'hunyuan':('https://api.hunyuan.cloud.tencent.com/v1','openai'), 'kimi':('https://api.moonshot.cn/v1','openai'),
  'qwen':('https://dashscope.aliyuncs.com/compatible-mode/v1','openai'), 'seed':('https://ark.cn-beijing.volces.com/api/v3','openai'),
  'wenxin':('https://qianfan.baidubce.com/v2','openai'),
+ 'custom':('','openai'),
 }
 LIMIT=threading.BoundedSemaphore(4)
 def assistant(d,uid,id):
@@ -46,18 +47,19 @@ def base_url(config):
     return api_base(config['api_base'])
 def model_request(config,key,url,body,headers):
     uid=meter_owner.get()
-    if uid:return metered(uid,base_url(config),key,config['model'],url,body,headers)
-    return request_json(url,body,headers)
+    options={'allow_http':True} if config.get('family')=='custom' and config['api_base'].strip().lower().startswith('http://') else {}
+    if uid:return metered(uid,base_url(config),key,config['model'],url,body,headers,**options)
+    return request_json(url,body,headers,**options)
 
 def invoke(config,key,messages,system,max_tokens=None,tools=None):
     from ..ai_protocol import invoke as provider_invoke
     return provider_invoke(config,key,messages,system,model_request,max_tokens,tools)
 
 class Config(BaseModel):
-    name:str=Field(min_length=1,max_length=60)
+    name:str=Field(default='',max_length=60)
     family:str
     prompt:str=Field(default='你是一位认真、友善的助手。使用 Markdown 和 LaTeX 书写。',max_length=20000)
-    model:str=Field(min_length=1,max_length=200,pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:/-]*$')
+    model:str=Field(default='',max_length=200,pattern=r'^(?:[A-Za-z0-9][A-Za-z0-9_.:/-]*)?$')
     protocol:Literal['openai','responses','anthropic','gemini']='openai'
     api_base:str=Field(max_length=500)
     api_key:str|None=Field(default=None,max_length=2000)
@@ -71,14 +73,16 @@ class Config(BaseModel):
     context_chars:int=Field(default=32000,ge=8000,le=120000)
 def save_config(body,u,id=None):
     if body.family not in FAMILIES:raise HTTPException(422,'请选择提供的模型形象')
-    endpoint(body.api_base)
+    endpoint(body.api_base,allow_http=body.family=='custom')
+    if body.family!='custom' and (not body.name.strip() or not body.model):raise HTTPException(422,'请填写助手名称和模型 ID')
     if body.api_key and ('\n' in body.api_key or '\r' in body.api_key):raise HTTPException(422,'API 密钥格式无效')
     with connect(True) as d:
         old=assistant(d,u['id'],id) if id else None
         if body.workspace_id or body.memory_id:
             if not installed(d,u['id'],'library'):raise HTTPException(409,'安装流萤集后才能配置工作空间与记忆库')
             folder(d,u['id'],body.workspace_id);folder(d,u['id'],body.memory_id)
-        config=body.model_dump(exclude={'api_key','clear_key'});secret=seal(body.api_key) if body.api_key else '' if body.clear_key else old['secret'] if old else ''
+        if old and not body.api_key and not body.clear_key and base_url(json.loads(old['config']))!=base_url(body.model_dump()) and old['secret']:raise HTTPException(422,'更改接口地址时请重新填写密钥，或移除原密钥')
+        config=body.model_dump(exclude={'api_key','clear_key'});config['name']=body.name.strip() or '自定义助手';secret=seal(body.api_key) if body.api_key else '' if body.clear_key else old['secret'] if old else ''
         id=id or uuid.uuid4().hex;d.execute('INSERT INTO assistants VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config,secret=excluded.secret,updated_at=excluded.updated_at',(id,u['id'],json.dumps(config,ensure_ascii=False),secret,now()))
         return public(assistant(d,u['id'],id))
 @router.get('')
@@ -86,7 +90,7 @@ def listing(u=Depends(user)):
     with connect() as d:return {'assistants':[public(r) for r in d.execute('SELECT * FROM assistants WHERE user_id=? ORDER BY updated_at DESC',(u['id'],))],'families':[{'id':k,'name':v,'image':'/api/plugins/constellation/avatar/'+k,'api_base':PROVIDERS[k][0],'protocol':PROVIDERS[k][1]} for k,v in FAMILIES.items()],'library_enabled':installed(d,u['id'],'library'),'prompts':[dict(r) for r in d.execute('SELECT id,title,content FROM ai_prompts WHERE user_id=?',(u['id'],))]}
 @router.get('/avatar/{family}')
 def avatar(family:str,u=Depends(user)):
-    if family not in FAMILIES:raise HTTPException(404,'形象不存在')
+    if family not in FAMILIES or family=='custom':raise HTTPException(404,'形象不存在')
     return FileResponse(Path(__file__).parents[1]/'content/ai'/f'{family}.webp',media_type='image/webp')
 @router.post('/assistants',status_code=201)
 def create(body:Config,u=Depends(user)):return save_config(body,u)
@@ -105,7 +109,8 @@ def models(id:str,u=Depends(user)):
     with connect() as d:row=assistant(d,u['id'],id)
     config=json.loads(row['config']);key=open_secret(row['secret'])
     headers={'Authorization':'Bearer '+key} if config['protocol'] in ('openai','responses') else {'x-api-key':key,'anthropic-version':'2023-06-01'} if config['protocol']=='anthropic' else {'x-goog-api-key':key}
-    data=request_json(models_url(base_url(config),language_only=True),headers=headers)
+    if not key:headers={}
+    data=request_json(models_url(base_url(config),language_only=True),headers=headers,**({'allow_http':True} if config.get('family')=='custom' and config['api_base'].strip().lower().startswith('http://') else {}))
     rows=data.get('data',data.get('models',[]))
     return {'models':[{'id':m.get('id') or m.get('name','').removeprefix('models/'),'name':m.get('displayName') or m.get('id') or m.get('name')} for m in rows if isinstance(m,dict)][:1000]}
 
@@ -113,13 +118,15 @@ class Prompt(BaseModel):
     title:str=Field(min_length=1,max_length=100)
     content:str=Field(min_length=1,max_length=20000)
 class Probe(BaseModel):
+    family:str=''
     api_base:str=Field(max_length=500)
     api_key:str=Field(default='',max_length=2000)
     protocol:Literal['openai','responses','anthropic','gemini']='openai'
     assistant_id:str|None=None
 @router.post('/models')
 def probe_models(body:Probe,u=Depends(user)):
-    endpoint(body.api_base)
+    custom=body.family=='custom'
+    endpoint(body.api_base,allow_http=custom)
     if '\n' in body.api_key or '\r' in body.api_key:raise HTTPException(422,'密钥格式无效')
     key=body.api_key
     if not key and body.assistant_id:
@@ -128,7 +135,8 @@ def probe_models(body:Probe,u=Depends(user)):
         if base_url(previous)!=base_url({'api_base':body.api_base}) or previous['protocol']!=body.protocol:raise HTTPException(422,'接口或协议已更改，请填写对应的 API 密钥后读取模型')
         key=open_secret(stored['secret'])
     config={'api_base':body.api_base};headers={'x-goog-api-key':key} if body.protocol=='gemini' else {'x-api-key':key,'anthropic-version':'2023-06-01'} if body.protocol=='anthropic' else {'Authorization':'Bearer '+key}
-    data=request_json(models_url(base_url(config),language_only=True),headers=headers)
+    if not key:headers={}
+    data=request_json(models_url(base_url(config),language_only=True),headers=headers,**({'allow_http':True} if custom and body.api_base.strip().lower().startswith('http://') else {}))
     rows=data.get('data',data.get('models',[]))
     return {'models':[{'id':m.get('id') or m.get('name','').removeprefix('models/'),'name':m.get('displayName') or m.get('id') or m.get('name')} for m in rows if isinstance(m,dict)][:1000]}
 @router.post('/prompts')
@@ -209,7 +217,7 @@ def run_chat(id,body,u,queued=False):
                 if old['input_hash'] and old['input_hash']!=fingerprint:raise HTTPException(409,'请求标识已用于不同内容，请重新发送')
                 if old['status']=='completed':return json.loads(old['result'])
                 raise HTTPException(409,'该请求正在处理或已失败，请刷新对话后重试')
-            if not row['secret']:raise HTTPException(409,'请先在助手设置中填写 API 密钥')
+            if not row['secret'] and config.get('family')!='custom':raise HTTPException(409,'请先在助手设置中填写 API 密钥')
             if d.execute("SELECT 1 FROM ai_turns WHERE user_id=? AND status IN ('queued','running') AND request_id!=?",(u['id'],body.request_id)).fetchone():raise HTTPException(409,'已有回答正在生成，请稍候')
             library_enabled=installed(d,u['id'],'library');documents=[];workspace_nodes=[];selected=None;memory=None
             if library_enabled:
@@ -318,7 +326,7 @@ def start_chat(id:str,body:Chat,u=Depends(user)):
         t=thread(d,u['id'],id)
         if t['archived']:raise HTTPException(409,'请先恢复归档对话')
         a=assistant(d,u['id'],t['assistant_id'])
-        if not a['secret']:raise HTTPException(409,'请填写 API 密钥')
+        if not a['secret'] and json.loads(a['config']).get('family')!='custom':raise HTTPException(409,'请填写 API 密钥')
         old=d.execute('SELECT * FROM ai_turns WHERE user_id=? AND request_id=?',(u['id'],body.request_id)).fetchone()
         if old:
             if old['thread_id']!=id or old['input_hash']!=fingerprint:raise HTTPException(409,'请求标识已用于不同内容')

@@ -38,10 +38,14 @@ async def lifespan(app):
         conn.execute("UPDATE ai_turns SET status='failed',error='服务已重启，请重新发送' WHERE status IN ('queued','running')")
     from .companion_jobs import recover as recover_companions,start_scheduler
     recover_companions();companion_stop=start_scheduler()
+    from .plugins.atlas import start_scheduler as start_atlas_scheduler
+    atlas_stop=start_atlas_scheduler()
     try:yield
-    finally:companion_stop.set()
+    finally:companion_stop.set();atlas_stop.set()
 
-app=FastAPI(title='破晓 DawnBreaker',version='1.4.6',lifespan=lifespan)
+app=FastAPI(title='破晓 DawnBreaker',version='1.4.7',lifespan=lifespan)
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware,minimum_size=1024)
 
 @app.middleware('http')
 async def protection(request:Request,call_next):
@@ -61,7 +65,7 @@ async def protection(request:Request,call_next):
     if request.url.path=='/api/plugins/atlas/view':response.headers['Content-Security-Policy']="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self'; frame-ancestors 'self'; object-src 'none'"
     response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
     if request.url.path.startswith('/api'):
-        response.headers['Cache-Control']='no-store'
+        if 'cache-control' not in response.headers:response.headers['Cache-Control']='no-store'
     else:
         response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data: https://ddragon.leagueoflegends.com; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     return response
@@ -123,7 +127,7 @@ def logout(request:Request,response:Response):
 @app.get('/api/bootstrap')
 def bootstrap(u=Depends(require_user)):
     with db.connect() as conn:
-        return {'user':public_user(u),'wallet':{k:balance(conn,u['id'],k) for k in ['essence','stones']},'plugins':[p for p in catalog(conn,u['id']) if p['installed']],'version':'1.4.6'}
+        return {'user':public_user(u),'wallet':{k:balance(conn,u['id'],k) for k in ['essence','stones']},'plugins':[p for p in catalog(conn,u['id']) if p['installed']],'version':'1.4.7'}
 
 class Profile(BaseModel):
     nickname:str=Field(min_length=1,max_length=30)
@@ -188,7 +192,7 @@ def wallet(page:int=Query(1,ge=1),u=Depends(require_user)):
 @app.get('/api/health')
 def health():
     with db.connect() as conn: conn.execute('SELECT 1').fetchone()
-    return {'status':'ok','service':'DawnBreaker','version':'1.4.6'}
+    return {'status':'ok','service':'DawnBreaker','version':'1.4.7'}
 
 for module in MODULES: app.include_router(module.router)
 from .admin import router as admin_router

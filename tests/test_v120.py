@@ -10,7 +10,7 @@ from server.secret_store import seal
 def test_provider_presets_and_admin_key_isolation(client,monkeypatch):
     register(client);install(client,'atlas')
     providers=client.get('/api/plugins/atlas/monitors').json()['providers']
-    assert len(providers)==19 and not any(p['id']=='swe' for p in providers)
+    assert len(providers)==18 and not any(p['id']=='meta' for p in providers) and not any(p['id']=='swe' for p in providers)
     row={'provider_id':'openai','api_base':'https://another.example/v1','billing_secret':seal('private-admin')}
     monkeypatch.setattr(monitors,'request_json',lambda *a,**k:pytest.fail('Admin key must not be sent to another origin'))
     report={'errors':[]};monitors.provider_statistics(row,'inference-key',report)

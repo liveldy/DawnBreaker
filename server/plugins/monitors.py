@@ -17,7 +17,8 @@ class Config(BaseModel):
     provider_id:str=Field(default='custom',max_length=40)
     billing_key:str=Field(default='',max_length=2000)
     clear_billing_key:bool=False
-    name:str=Field(min_length=1,max_length=80)
+    management_id:str=Field(default='',max_length=100,pattern=r'^[A-Za-z0-9_-]*$')
+    name:str=Field(default='',max_length=80)
     api_base:str=Field(min_length=1,max_length=500)
     api_key:str=Field(default='',max_length=2000)
     protocol:Literal['openai','responses','anthropic','gemini']='openai'
@@ -28,18 +29,21 @@ def owned(d,uid,id):
 def public(row):
     with connect() as d:
         counts=d.execute("SELECT COUNT(*),SUM(json_extract(payload,'$.tokens')),SUM(CASE WHEN json_extract(payload,'$.tokens') IS NULL THEN 1 ELSE 0 END) FROM events WHERE user_id=? AND kind='api-usage' AND json_extract(payload,'$.key_hash')=? AND json_extract(payload,'$.base') IN (?,?)",(row['user_id'],fingerprint(open_secret(row['secret'])),row['api_base'],api_base(row['api_base']))).fetchone()
-    return {k:row[k] for k in ('id','name','api_base','protocol','updated_at','provider_id')}|{'has_billing_key':bool(row['billing_secret'])}|{'has_key':bool(row['secret']),'report':json.loads(row['report']),'local_usage':{'requests':counts[0],'tokens':0 if not counts[0] else counts[1],'missing_token_reports':counts[2] or 0}}
+    value={k:row[k] for k in ('id','name','api_base','protocol','updated_at','provider_id','management_id')}|{'has_billing_key':bool(row['billing_secret'])}|{'has_key':bool(row['secret']),'report':json.loads(row['report']),'local_usage':{'requests':counts[0],'tokens':0 if not counts[0] else counts[1],'missing_token_reports':counts[2] or 0}}
+    if value['provider_id'] not in PROVIDERS:value['provider_id']='custom'
+    return value
 def number(value):
     try:v=float(value);return v if math.isfinite(v) and v>=0 else None
     except (TypeError,ValueError):return None
 def auth(row,key):
+    if not key:return {}
     return {'x-goog-api-key':key} if row['protocol']=='gemini' else {'x-api-key':key,'anthropic-version':'2023-06-01'} if row['protocol']=='anthropic' else {'Authorization':'Bearer '+key}
 def probe(row,key):
     base=api_base(row['api_base']);host=urlsplit(base).hostname
     report={'provider':host,'balance':None,'spent':None,'requests':None,'tokens':None,'currency':None,'models':[],'statistics_note':'此平台未提供通用账单接口；空缺项目表示不可获取。','fetched_at':now(),'errors':[]}
     start=time.perf_counter()
     try:
-        data=request_json(models_url(base),headers=auth(row,key));report['latency_ms']=round((time.perf_counter()-start)*1000)
+        data=request_json(models_url(base),headers=auth(row,key),**({'allow_http':True} if row['provider_id']=='custom' and row['api_base'].strip().lower().startswith('http://') else {}));report['latency_ms']=round((time.perf_counter()-start)*1000)
         rows=data.get('data',data.get('models'))
         if not isinstance(rows,list):raise HTTPException(502,'未返回兼容的模型列表，请参照运营商文档填写模型 ID')
         report['models_available']=True
@@ -73,12 +77,35 @@ def provider_statistics(row,key,report):
     if not provider:return
     report['provider']=provider['name'];report['docs']=provider['docs'];report['statistics_note']=provider['note']
     base=api_base(row['api_base'])
-    if urlsplit(base).netloc!=urlsplit(provider['base']).netloc:
+    if urlsplit(base).netloc not in provider.get('billing_hosts',[urlsplit(provider['base']).netloc]) or urlsplit(base).scheme!='https':
         report['statistics_note']+=' 自定义地域 / 中转地址未匹配预设，未转发管理密钥。';return
     adapter=provider['billing']
     try:
+        if adapter=='xai':
+            if not row['billing_secret'] or not row['management_id']:
+                report['statistics_note']+=' 填写 Management Key 与 Team ID 后可查询团队余额及近 30 天用量。';return
+            from ..xai_statistics import statistics
+            statistics(row['management_id'],open_secret(row['billing_secret']),request_json,report);return
         if adapter=='moonshot':
-            data=request_json(base+'/users/me/balance',headers=auth(row,key)).get('data',{});report.update(balance=number(data.get('available_balance')),currency='USD',balance_label='账户可用余额')
+            data=request_json(base+'/users/me/balance',headers=auth(row,key)).get('data',{});report.update(balance=number(data.get('available_balance')),currency='CNY' if urlsplit(base).hostname=='api.moonshot.cn' else 'USD',balance_label='账户可用余额')
+            if row['billing_secret'] and urlsplit(base).hostname=='api.moonshot.ai':
+                headers={'Authorization':'Bearer '+open_secret(row['billing_secret'])}
+                data=request_json(base+'/admin/organizations/account',headers=headers)
+                balance=float(data['available_balance'])/100000;spent=float(data['total_consume'])/100000
+                if not math.isfinite(balance) or not math.isfinite(spent):raise ValueError('non-finite amount')
+                report.update(balance=balance,spent=spent,currency='USD',balance_label='组织账户余额',spent_label='组织累计消费')
+                from zoneinfo import ZoneInfo
+                end=datetime.now(ZoneInfo('Asia/Shanghai')).replace(hour=0,minute=0,second=0,microsecond=0);start=end-timedelta(days=30)
+                params={'start':int(start.timestamp()*1000),'end':int(end.timestamp()*1000),'granularity':'1d','limit':1000};rows=[]
+                for _ in range(10):
+                    data=request_json(base+'/admin/organizations/usage/completions',headers=headers,params=params)
+                    if not isinstance(data.get('data'),list):raise ValueError('missing usage')
+                    rows.extend(data['data'])
+                    if not data.get('has_more'):break
+                    if not data.get('next'):raise ValueError('missing cursor')
+                    params=params|{'cursor':data['next']}
+                else:raise HTTPException(502,'Kimi 统计分页超出上限，未显示不完整合计')
+                report.update(requests=sum(r['request_count'] for r in rows),tokens=sum(r['prompt_tokens']+r['completion_tokens']+r.get('cache_write_5m_tokens',0)+r.get('cache_write_1h_tokens',0) for r in rows),usage_scope='组织近30个完整自然日；当天不计，缓存命中已包含在输入 Token 中')
         if adapter=='302ai':
             origin=urlsplit(base);data=request_json(origin.scheme+'://'+origin.netloc+'/dashboard/balance',headers=auth(row,key)).get('data',{});report.update(balance=number(data.get('balance')),currency='USD',balance_label='账户余额')
         if adapter not in ('openai','anthropic') or not row['billing_secret']:return
@@ -86,7 +113,9 @@ def provider_statistics(row,key,report):
         def pages(path,params,headers):
             result=[]
             for _ in range(5):
-                data=request_json(base+path,params=params,headers=headers);result.extend(r for bucket in data.get('data',[]) for r in bucket.get('results',[]))
+                data=request_json(base+path,params=params,headers=headers)
+                if not isinstance(data.get('data'),list) or any(not isinstance(bucket.get('results'),list) for bucket in data['data']):raise HTTPException(502,'账单返回格式不完整，未将缺失数据当作零')
+                result.extend(r for bucket in data['data'] for r in bucket['results'])
                 if not data.get('has_more'):return result
                 if not data.get('next_page'):raise HTTPException(502,'账单分页返回不完整')
                 params=params|{'page':data['next_page']}
@@ -107,24 +136,24 @@ def listing(u=Depends(user)):
     with connect() as d:return {'providers':list(PROVIDERS.values()),'monitors':[public(dict(r)) for r in d.execute('SELECT * FROM api_monitors WHERE user_id=? ORDER BY updated_at DESC',(u['id'],))]}
 @router.post('',status_code=201)
 def create(body:Config,u=Depends(user)):
-    endpoint(body.api_base)
+    endpoint(body.api_base,allow_http=body.provider_id=='custom')
     if body.provider_id!='custom' and body.provider_id not in PROVIDERS:raise HTTPException(422,'运营商不存在')
     if any(c in body.billing_key for c in '\r\n'):raise HTTPException(422,'管理密钥格式无效')
-    if not body.api_key or any(c in body.api_key for c in '\r\n'):raise HTTPException(422,'请输入有效 API 密钥')
+    if (not body.api_key and body.provider_id!='custom') or any(c in body.api_key for c in '\r\n'):raise HTTPException(422,'请输入有效 API 密钥')
     with connect(True) as d:
         if d.execute('SELECT COUNT(*) FROM api_monitors WHERE user_id=?',(u['id'],)).fetchone()[0]>=30:raise HTTPException(409,'最多添加 30 个监视卡片')
-        id=uuid.uuid4().hex;d.execute('INSERT INTO api_monitors(id,user_id,name,api_base,secret,protocol,report,updated_at,provider_id,billing_secret) VALUES(?,?,?,?,?,?,?,?,?,?)',(id,u['id'],body.name,body.api_base.rstrip('/'),seal(body.api_key),body.protocol,'{}',now(),body.provider_id,seal(body.billing_key)));return public(owned(d,u['id'],id))
+        id=uuid.uuid4().hex;d.execute('INSERT INTO api_monitors(id,user_id,name,api_base,secret,protocol,report,updated_at,provider_id,billing_secret,management_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(id,u['id'],body.name.strip() or '自定义接口',body.api_base.rstrip('/'),seal(body.api_key),body.protocol,'{}',now(),body.provider_id,seal(body.billing_key),body.management_id));return public(owned(d,u['id'],id))
 @router.put('/{id}')
 def update(id:str,body:Config,u=Depends(user)):
-    endpoint(body.api_base)
+    endpoint(body.api_base,allow_http=body.provider_id=='custom')
     if body.provider_id!='custom' and body.provider_id not in PROVIDERS:raise HTTPException(422,'运营商不存在')
     if any(c in body.billing_key for c in '\r\n'):raise HTTPException(422,'管理密钥格式无效')
     if any(c in body.api_key for c in '\r\n'):raise HTTPException(422,'密钥格式无效')
     with connect(True) as d:
         old=owned(d,u['id'],id)
-        if body.api_base.rstrip('/')!=old['api_base'] and not body.api_key:raise HTTPException(422,'更换平台地址时请重新填写密钥')
+        if body.api_base.rstrip('/')!=old['api_base'] and not body.api_key and old['secret']:raise HTTPException(422,'更换平台地址时请重新填写密钥')
         billing=seal(body.billing_key) if body.billing_key else '' if body.clear_billing_key or body.provider_id!=old['provider_id'] or body.api_base.rstrip('/')!=old['api_base'] else old['billing_secret']
-        d.execute('UPDATE api_monitors SET name=?,api_base=?,secret=?,protocol=?,report=?,updated_at=?,provider_id=?,billing_secret=? WHERE id=?',(body.name,body.api_base.rstrip('/'),seal(body.api_key) if body.api_key else old['secret'],body.protocol,'{}',now(),body.provider_id,billing,id));return public(owned(d,u['id'],id))
+        d.execute('UPDATE api_monitors SET name=?,api_base=?,secret=?,protocol=?,report=?,updated_at=?,provider_id=?,billing_secret=?,management_id=? WHERE id=?',(body.name.strip() or '自定义接口',body.api_base.rstrip('/'),seal(body.api_key) if body.api_key else old['secret'],body.protocol,'{}',now(),body.provider_id,billing,body.management_id,id));return public(owned(d,u['id'],id))
 @router.delete('/{id}')
 def delete(id:str,u=Depends(user)):
     with connect(True) as d:owned(d,u['id'],id);d.execute('DELETE FROM api_monitors WHERE id=? AND user_id=?',(id,u['id']))
@@ -145,7 +174,7 @@ def refresh(id:str,u=Depends(user)):
             report=previous|{'errors':report['errors'],'stale':True,'attempted_at':now(),'epoch':report['epoch']}
         with connect(True) as d:
             current=owned(d,u['id'],id)
-            if current['secret']!=row['secret'] or current['api_base']!=row['api_base'] or current['billing_secret']!=row['billing_secret'] or current['provider_id']!=row['provider_id']:raise HTTPException(409,'配置已更改，请重新获取')
+            if any(current[k]!=row[k] for k in ('secret','api_base','billing_secret','provider_id','management_id','protocol')):raise HTTPException(409,'配置已更改，请重新获取')
             current_report=json.loads(current['report'])
             for k in ('speed','test_epoch'):
                 if k in current_report:report[k]=current_report[k]
@@ -173,7 +202,7 @@ def speed_test(id:str,body:SpeedTest,u=Depends(user)):
         elif row['protocol']=='anthropic':url=base+'/messages';payload={'model':body.model,'max_tokens':32,'messages':[{'role':'user','content':'Reply with one short sentence: hello.'}]}
         elif row['protocol']=='gemini':url=base+'/models/'+body.model+':generateContent';payload={'contents':[{'parts':[{'text':'Reply with one short sentence: hello.'}]}],'generationConfig':{'maxOutputTokens':32}}
         else:url=base+'/chat/completions';payload={'model':body.model,'max_tokens':32,'stream':False,'messages':[{'role':'user','content':'Reply with one short sentence: hello.'}]}
-        data=metered(u['id'],base,key,body.model,url,payload,auth(row,key));elapsed=time.perf_counter()-start;usage=data.get('usage',data.get('usageMetadata',{})) or {};output=number(usage.get('completion_tokens',usage.get('output_tokens',usage.get('candidatesTokenCount'))))
+        data=metered(u['id'],base,key,body.model,url,payload,auth(row,key),**({'allow_http':True} if row['provider_id']=='custom' and row['api_base'].strip().lower().startswith('http://') else {}));elapsed=time.perf_counter()-start;usage=data.get('usage',data.get('usageMetadata',{})) or {};output=number(usage.get('completion_tokens',usage.get('output_tokens',usage.get('candidatesTokenCount'))))
         with connect(True) as d:
             current=owned(d,u['id'],id)
             if current['secret']!=row['secret'] or current['api_base']!=stored_base:raise HTTPException(409,'配置已更改，请重新测速')

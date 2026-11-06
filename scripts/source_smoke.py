@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 with tempfile.TemporaryDirectory(prefix='dawn-source-') as folder:
     os.environ['DAWN_DATA_DIR']=folder
+    os.environ['DAWN_ATLAS_SCHEDULER']='0'
     from fastapi.testclient import TestClient
     from server.main import app
     with TestClient(app) as c:

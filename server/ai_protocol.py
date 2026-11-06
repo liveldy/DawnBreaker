@@ -70,6 +70,10 @@ def invoke(config,key,messages,system,request,max_tokens=None,tools=None):
         if config.get('family')=='deepseek' and model.lower().startswith('deepseek'):body['thinking']={'type':'enabled' if thinking else 'disabled'}
         if tools:body['tools']=[{'type':'function','function':t} for t in tools]
         url=base+'/chat/completions';headers={'Authorization':'Bearer '+key}
+    if not key:headers={k:v for k,v in headers.items() if k.lower() not in ('authorization','x-api-key','x-goog-api-key')}
+    if not model:
+        if protocol=='gemini':raise HTTPException(409,'Gemini 调用需要先填写模型 ID')
+        body.pop('model',None)
     data=request(config,key,url,body,headers)
     try:
         if protocol=='responses':
@@ -83,5 +87,5 @@ def invoke(config,key,messages,system,request,max_tokens=None,tools=None):
             candidate=data.get('candidates',[{}])[0];parts=candidate.get('content',{}).get('parts',[])
             return ModelReply('\n'.join(p.get('text','') for p in parts if not p.get('thought')),'\n'.join(p.get('text','') for p in parts if p.get('thought')) if thinking else '',[function(p['functionCall']['name'],p['functionCall'].get('args',{}),p['functionCall'].get('id'))|{'provider_id':p['functionCall'].get('id')} for p in parts if p.get('functionCall')],parts,candidate.get('finishReason')=='MAX_TOKENS')
         choice=data['choices'][0];message=choice['message'];content=message.get('content') or '';text=content if isinstance(content,str) else '\n'.join(p.get('text','') for p in content)
-        return ModelReply(text,(message.get('reasoning_content') or message.get('reasoning') or '') if thinking else '',[function(p['function']['name'],p['function'].get('arguments',{}),p.get('id')) for p in message.get('tool_calls',[])],message,choice.get('finish_reason')=='length')
+        return ModelReply(text,(message.get('reasoning_content') or message.get('reasoning') or '') if thinking else '',[function(p['function']['name'],p['function'].get('arguments',{}),p.get('id')) for p in (message.get('tool_calls') or [])],message,choice.get('finish_reason')=='length')
     except (KeyError,TypeError,IndexError):raise HTTPException(502,'API 未返回可读取的回答，请检查协议和模型 ID')

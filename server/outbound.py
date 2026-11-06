@@ -3,7 +3,7 @@ import http.client,ipaddress,json,socket,ssl,os
 import httpx
 from urllib.parse import urlsplit,urlencode
 from fastapi import HTTPException
-from .ai_endpoints import is_xai
+from .ai_endpoints import is_xai_service
 from .xai_egress import configured_proxy
 
 MAX_RESPONSE=16*1024*1024
@@ -35,13 +35,13 @@ def proxy_request(url,body,headers,params,proxy):
     except HTTPException:raise
     except Exception:raise xai_network_error()
 
-def endpoint(value):
+def endpoint(value,allow_http=False):
     p=urlsplit(value.strip())
-    if p.scheme!='https' or not p.hostname or p.username or p.password or p.query or p.fragment:raise HTTPException(422,'API 地址需为 HTTPS，不要在地址中填写密钥、查询参数或账号')
+    if p.scheme not in (('https','http') if allow_http else ('https',)) or not p.hostname or p.username or p.password or p.query or p.fragment:raise HTTPException(422,'API 地址需为 HTTPS（自定义接口可用 HTTP），不要附加密钥、查询参数或账号')
     try:literal=ipaddress.ip_address(p.hostname)
     except ValueError:literal=None
     if literal and not literal.is_global:raise HTTPException(422,'API 地址不能指向本机、内网或系统保留地址')
-    try:port=p.port or 443
+    try:port=p.port or (443 if p.scheme=='https' else 80)
     except ValueError:raise HTTPException(422,'API 端口无效')
     return p,port
 def public_addresses(host,port):
@@ -49,23 +49,26 @@ def public_addresses(host,port):
     except OSError:raise HTTPException(502,'无法解析 API 地址，请检查配置')
     if not addresses or any(not ipaddress.ip_address(ip).is_global for ip in addresses):raise HTTPException(422,'API 地址不能指向本机、内网或系统保留地址')
     return addresses
-def request_json(url,body=None,headers=None,params=None):
-    parsed,port=endpoint(url)
+def request_json(url,body=None,headers=None,params=None,allow_http=False):
+    parsed,port=endpoint(url,allow_http=allow_http)
     request_headers={'Accept':'application/json','Content-Type':'application/json','User-Agent':'DawnBreaker',**(headers or {})}
-    official_xai=is_xai(url);proxy=configured_proxy() if official_xai else ''
+    official_xai=is_xai_service(url);proxy=configured_proxy() if official_xai else ''
     if official_xai and proxy:return proxy_request(url,body,request_headers,params,proxy)
     try:ips=public_addresses(parsed.hostname,port)
     except HTTPException:
         if official_xai:raise xai_network_error()
         raise
-    class Pinned(http.client.HTTPSConnection):
+    class Pinned(http.client.HTTPSConnection if parsed.scheme=='https' else http.client.HTTPConnection):
         def connect(self):
             last=None
             for ip in ips:
-                try:self.sock=self._context.wrap_socket(socket.create_connection((ip,port),timeout=20),server_hostname=parsed.hostname);self.sock.settimeout(120);return
+                try:
+                    self.sock=socket.create_connection((ip,port),timeout=20)
+                    if parsed.scheme=='https':self.sock=self._context.wrap_socket(self.sock,server_hostname=parsed.hostname)
+                    self.sock.settimeout(120);return
                 except OSError as e:last=e
             raise last or OSError()
-    conn=Pinned(parsed.hostname,port,timeout=120,context=ssl.create_default_context())
+    conn=Pinned(parsed.hostname,port,timeout=120,**({'context':ssl.create_default_context()} if parsed.scheme=='https' else {}))
     try:
         payload=json.dumps(body,ensure_ascii=False).encode('utf-8') if body is not None else None
         conn.request('POST' if body is not None else 'GET',(parsed.path or '/')+('?' + urlencode(params,doseq=True) if params else ''),body=payload,headers=request_headers)

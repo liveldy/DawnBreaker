@@ -29,7 +29,7 @@ def test_model_chooses_own_sticker_without_user_request_or_image_generation(clie
     expected=stickers.PACKS[provider][8][0];assert sent[0]['sticker']['name']==expected and sent[0]['text']=='[表情包：'+expected+']'
     image=client.get(sent[0]['sticker']['url']);assert image.status_code==200 and image.headers['content-type']=='image/png'
     assert hashlib.sha256(image.content).digest()==hashlib.sha256((art/provider/'09.png').read_bytes()).digest()
-    assert image.headers['cache-control']=='no-store'  # Account API middleware enforces authentication on every fetch.
+    assert image.headers['cache-control']=='private, max-age=86400'  # Explicit per-account asset policy survives middleware.
     advertised=next(t for t in calls[0]['tools'] if (t.get('name') or t.get('function',{}).get('name'))=='send_sticker');parameters=advertised.get('parameters') or advertised['function']['parameters']
     assert parameters['properties']['sticker_id']['enum']==[f'{i:02}' for i in range(1,10)]
     assert '不必等用户要求' in str(calls[0])

@@ -7,6 +7,10 @@ def is_xai(base):
     value=urlsplit(base)
     return value.scheme=='https' and value.hostname in XAI_HOSTS and value.port in (None,443) and not value.username and not value.password
 
+def is_xai_service(base):
+    value=urlsplit(base)
+    return is_xai(base) or (value.scheme=='https' and value.hostname=='management-api.x.ai' and value.port in (None,443) and not value.username and not value.password)
+
 def api_base(value):
     base=value.strip().rstrip('/')
     for suffix in ('/chat/completions','/responses','/messages','/language-models','/models'):

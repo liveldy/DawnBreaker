@@ -14,6 +14,8 @@ ROOT=Path(__file__).parents[1]/'content'
 CONFIG=json.loads((ROOT/'cards.json').read_text(encoding='utf-8')) if (ROOT/'cards.json').is_file() else {'cards':[],'cost':10,'probabilities':{'R':75,'SR':20,'SSR':5}}
 ALBUMS=json.loads((ROOT/'card-albums.json').read_text(encoding='utf-8')) if (ROOT/'card-albums.json').is_file() else {'albums':[]}
 REFUNDS={'R':5,'SR':20,'SSR':50}
+# Adapted from lmliheng/DawnBreaker a935010; finite TTL permits art corrections.
+IMAGE_CACHE={'Cache-Control':'private, max-age=86400','Vary':'Cookie'}
 
 def normalize_owned(db,uid):
     owned=state(db,uid,'collection','owned',{})
@@ -28,13 +30,13 @@ def normalize_owned(db,uid):
 @router.get('/rarity/{name}')
 def rarity_image(name:str,u=Depends(user)):
     if name not in ('limited','legendary','mythic'):raise HTTPException(404,'标识不存在')
-    return FileResponse(ROOT/'rarity'/f'{name}.png',media_type='image/png')
+    return FileResponse(ROOT/'rarity'/f'{name}.png',media_type='image/png',headers=IMAGE_CACHE)
 
 @router.get('/splash/{card_id}')
 def splash(card_id:str,u=Depends(user)):
     with connect() as db:
         if not any(c['id']==card_id for c in accessible_cards(db,u['id'],CONFIG,ALBUMS)):raise HTTPException(403,'尚未安装对应卡册内容')
-    return FileResponse(media_path(ROOT,'splashes/'+card_id+'.webp'),media_type='image/webp')
+    return FileResponse(media_path(ROOT,'splashes/'+card_id+'.webp'),media_type='image/webp',headers=IMAGE_CACHE)
 
 def find_spec(id):
     return next((a for a in album_specs(ALBUMS) if a['id']==id),None)
@@ -45,7 +47,7 @@ def image(card_id:str,u=Depends(user)):
         cards=accessible_cards(db,u['id'],CONFIG,ALBUMS)
         card=next((c for c in cards if c['id']==card_id),None)
         if not card:raise HTTPException(403,'尚未安装对应卡册内容，或该卡片不存在')
-    return FileResponse(media_path(ROOT,'cards/'+card_id+'.webp'),media_type='image/webp')
+    return FileResponse(media_path(ROOT,'cards/'+card_id+'.webp'),media_type='image/webp',headers=IMAGE_CACHE)
 
 @router.get('/poster/{pack_id}')
 def poster(pack_id:str,view:Literal['draw','album']='draw',u=Depends(user)):
@@ -53,7 +55,7 @@ def poster(pack_id:str,view:Literal['draw','album']='draw',u=Depends(user)):
     with connect() as db:
         if not spec or not installed(db,u['id'],spec['content_plugin']):raise HTTPException(403,'尚未安装该卡册内容')
     if not spec.get('poster'):raise HTTPException(404,'尚未配置卡包海报')
-    return FileResponse(media_path(ROOT,spec.get('album_poster',spec['poster']) if view=='album' else spec['poster']),media_type='image/webp')
+    return FileResponse(media_path(ROOT,spec.get('album_poster',spec['poster']) if view=='album' else spec['poster']),media_type='image/webp',headers=IMAGE_CACHE)
 
 @router.get('')
 def get(u=Depends(user)):

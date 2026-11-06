@@ -9,6 +9,7 @@ from server.core import credit, today
 
 @pytest.fixture
 def client(tmp_path,monkeypatch):
+    monkeypatch.setenv('DAWN_ATLAS_SCHEDULER','0')
     monkeypatch.setattr(db,'DB',tmp_path/'test.db')
     RATE.clear()
     with TestClient(app) as client:

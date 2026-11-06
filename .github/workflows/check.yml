@@ -15,6 +15,6 @@ jobs:
       - run: node tests/atlas_resize.mjs
       - run: node tests/vault_entries.mjs
       - run: pip install -r requirements-dev.txt
-      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends pandoc libreoffice-writer libreoffice-math
-      - run: python -m pytest tests/test_xai.py tests/test_admin_egress.py tests/test_companion.py tests/test_companion_tools.py tests/test_companion_controls.py tests/test_companion143.py tests/test_workspace143.py tests/test_companion_stickers.py tests/test_vault145.py tests/test_word146.py tests/test_memory146.py -q
+      - run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends pandoc libreoffice-writer-nogui libreoffice-math-nogui
+      - run: python -m pytest tests/test_xai.py tests/test_admin_egress.py tests/test_companion.py tests/test_companion_tools.py tests/test_companion_controls.py tests/test_companion143.py tests/test_workspace143.py tests/test_companion_stickers.py tests/test_vault145.py tests/test_word146.py tests/test_memory146.py tests/test_update147.py -q
       - run: python scripts/source_smoke.py
